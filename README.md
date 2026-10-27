@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Centinela 🛡️
 
 **Pitch:** Centinela es el guardián entre los agentes de IA de una empresa y su dinero — decide si una acción se ejecuta sola, exige la firma física de un humano, o la bloquea, y deja constancia de absolutamente todo.
@@ -137,3 +138,7 @@ Ejemplos con curl en [`docs/03-api.md`](docs/03-api.md).
 - **El anclaje vive fuera de Mongo**: su diario registra éxitos y fallos, y la alerta de silencio se compara contra ese diario externo — no contra eventos borrables de la cadena.
 - **Sin transpilador para probar**: Node ≥ 22.6 ejecuta TypeScript de forma nativa (con `--experimental-strip-types`); las pruebas corren con `node --test` (cero dependencias de pruebas).
 - **`node_modules` plano** (`node-linker=hoisted` en [`pnpm-workspace.yaml`](pnpm-workspace.yaml)): en Windows sin permisos de symlink se evitan enlaces rotos.
+=======
+# Centinela
+Centinela es el guardián entre los agentes de IA de una empresa y su dinero — decide si una acción se ejecuta sola, exige la firma física de un humano, o la bloquea, y deja constancia de absolutamente todo.
+>>>>>>> 72759c3eaeae2e92a98be17fa530acdc4c91a4e0
