@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Centinela · Libro mayor</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16191e;
+    --panel: #1d2229;
+    --rule: #2d343e;
+    --rule-strong: #3b4450;
+    --ink: #e9e6dc;
+    --dim: #8f97a3;
+    --vermilion: #d64541;
+    --green: #57a773;
+    --gold: #c9a227;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: "Aptos", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 96px; }
+
+  /* ── cabecera ─────────────────────────────────────────── */
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; }
+  .wordmark { font-family: var(--serif); font-size: 1.9rem; letter-spacing: .04em; margin: 0; }
+  .tagline { color: var(--dim); font-size: .92rem; }
+  .header-actions { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  /* ── reglas de libro ──────────────────────────────────── */
+  .ledger-line {
+    font-family: var(--serif);
+    color: var(--dim);
+    border-top: 2px solid var(--rule-strong);
+    border-bottom: 1px solid var(--rule);
+    margin: 20px 0 8px;
+    padding: 10px 2px;
+    font-size: 1.02rem;
+  }
+  .ledger-line b { color: var(--ink); font-weight: 600; }
+
+  section { margin-top: 44px; }
+  section > h2 {
+    font-family: var(--serif);
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: .01em;
+  }
+  section > .lead { color: var(--dim); font-size: .9rem; margin: 0 0 14px; }
+  .section-rule { border: 0; border-top: 1px solid var(--rule); margin: 14px 0 0; }
+
+  /* ── tablas ───────────────────────────────────────────── */
+  .table-scroll { overflow-x: auto; border-top: 1px solid var(--rule); }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th {
+    text-align: left; font-weight: 500; color: var(--dim);
+    padding: 9px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap;
+    font-size: .8rem;
+  }
+  td { padding: 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tr.clickable { cursor: pointer; }
+  tbody tr.clickable:hover { background: var(--panel); }
+  .num { font-family: var(--serif); font-size: 1.05rem; text-align: right; white-space: nowrap; }
+  .mono { font-family: var(--mono); font-size: .8rem; color: var(--dim); }
+  .nowrap { white-space: nowrap; }
+
+  /* ── sellos ───────────────────────────────────────────── */
+  .stamp {
+    display: inline-block;
+    font-size: .66rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    color: var(--dim);
+  }
+  .stamp.approved { color: var(--green); }
+  .stamp.rejected { color: var(--vermilion); }
+  .stamp.pending { color: var(--gold); }
+
+  /* ── botones y controles ──────────────────────────────── */
+  .btn {
+    font: inherit; font-size: .9rem;
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--rule-strong); border-radius: 4px;
+    padding: 8px 14px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--ink); }
+  .btn.primary { background: var(--ink); color: #16191e; border-color: var(--ink); font-weight: 600; }
+  .btn.primary:hover { background: #f5f2e8; }
+  .btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 2px;
+  }
+  input, select, textarea {
+    font: inherit; font-size: .9rem;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--rule-strong); border-radius: 4px; padding: 6px 9px;
+  }
+  select { color: var(--ink); }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  .filters label { color: var(--dim); font-size: .85rem; display: flex; flex-direction: column; gap: 4px; }
+
+  /* ── edición de reglas ────────────────────────────────── */
+  .policy-table td { padding: 6px 10px; }
+  .policy-table input[type="number"] { width: 110px; }
+  .policy-table input[type="text"] { width: 140px; }
+  .policy-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 16px; }
+  .policy-meta label { display: flex; flex-direction: column; gap: 4px; color: var(--dim); font-size: .85rem; }
+  .policy-meta textarea { min-height: 74px; resize: vertical; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+  .save-row { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+  .issues { color: var(--vermilion); font-size: .88rem; margin-top: 10px; white-space: pre-wrap; }
+  .version-note { color: var(--dim); font-size: .85rem; }
+
+  /* ── cadena y auditoría ───────────────────────────────── */
+  .chain { font-size: .8rem; border: 1px solid var(--rule-strong); border-radius: 4px; padding: 4px 10px; color: var(--dim); }
+  .chain.ok { color: var(--green); border-color: var(--green); }
+  .chain.broken { color: var(--vermilion); border-color: var(--vermilion); }
+  .empty { color: var(--dim); border-top: 1px solid var(--rule); padding: 18px 2px; }
+  .trace { border-top: 1px dashed var(--rule); background: var(--panel); padding: 12px 14px; }
+  .trace h4 { margin: 10px 0 4px; font-size: .85rem; color: var(--dim); font-weight: 500; }
+  .trace ul { margin: 0; padding-left: 18px; font-size: .88rem; }
+  .trace li { margin: 2px 0; }
+  .trace .mono { font-size: .74rem; }
+
+  /* ── aviso ────────────────────────────────────────────── */
+  #toast {
+    position: fixed; right: 18px; bottom: 18px; max-width: 360px;
+    background: var(--ink); color: #16191e;
+    border-radius: 4px; padding: 12px 16px; font-size: .9rem;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, .45);
+    display: none;
+  }
+  #toast.err { background: var(--vermilion); color: #fff; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    #toast { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 class="wordmark">Centinela</h1>
+    <span class="tagline">Libro mayor — lo que tus agentes de IA proponen y quién lo autoriza.</span>
+    <div class="header-actions">
+      <span class="chain" id="chainBadge">cadena: comprobando…</span>
+      <a class="btn" href="/firmar">Firmar pendientes</a>
+      <button class="btn primary" id="verifyBtn" type="button">Verificar cadena</button>
+    </div>
+  </header>
+
+  <p class="ledger-line" id="ledgerLine">Cargando el libro…</p>
+
+  <section>
+    <h2>En espera de firma</h2>
+    <p class="lead">Lo que ningún agente puede ejecutar solo: hace falta tu llave, con los datos exactos en el reto. Los códigos de verificación son para compararlos con la pantalla de firma en <em>otro</em> dispositivo.</p>
+    <div id="pending"></div>
+  </section>
+
+  <section>
+    <h2>Reglas de la empresa</h2>
+    <p class="lead">Límites en euros. Guardar crea una versión nueva; el motor la usa al instante y el cambio queda auditado.</p>
+    <div class="table-scroll">
+      <table class="policy-table" id="policyTable">
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th>Habilitado</th>
+            <th style="text-align:right">Aprueba automáticamente hasta</th>
+            <th style="text-align:right">Exige firma hasta</th>
+            <th>Monedas</th>
+            <th>Roles para el quórum (csv)</th>
+          </tr>
+        </thead>
+        <tbody id="policyBody"></tbody>
+      </table>
+    </div>
+    <div class="policy-meta">
+      <label>Destinos de confianza (uno por línea, * = prefijo)
+        <textarea id="trustedInput"></textarea>
+      </label>
+      <label>Destinos prohibidos (uno por línea, * = prefijo)
+        <textarea id="denyInput"></textarea>
+      </label>
+      <label>La firma caduca a los (minutos)
+        <input type="number" id="ttlInput" min="1" style="width:110px">
+      </label>
+      <label class="check" style="align-self:end; padding-bottom:8px">
+        <input type="checkbox" id="newDestCheck"> Exigir firma para destinos nuevos
+      </label>
+    </div>
+    <div class="save-row">
+      <button class="btn primary" id="savePolicy" type="button">Guardar cambios</button>
+      <span class="version-note" id="policyVersion"></span>
+    </div>
+    <div class="issues" id="policyIssues"></div>
+  </section>
+
+  <section>
+    <h2>Historial</h2>
+    <p class="lead">Cada asiento lleva su rastro: decisión del motor, ejecución y firma. Toca una fila para desplegarlo.</p>
+    <div class="filters">
+      <label>Estado
+        <select id="filterStatus">
+          <option value="">Todos</option>
+          <option>proposed</option><option>pending_signature</option><option>approved</option>
+          <option>rejected</option><option>expired</option>
+        </select>
+      </label>
+      <label>Tipo
+        <select id="filterType">
+          <option value="">Todos</option>
+          <option>payment</option><option>reservation</option><option>loan</option><option>data_access</option>
+        </select>
+      </label>
+      <label>Agente
+        <input type="text" id="filterAgent" placeholder="agente-compras" style="width:150px">
+      </label>
+      <button class="btn" id="historyRefresh" type="button" style="align-self:end">Actualizar</button>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Cuándo</th>
+            <th style="text-align:right">Importe</th>
+            <th>Tipo · destino</th>
+            <th>Agente</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Auditoría</h2>
+    <p class="lead">Registro append-only con cadena de hashes: alterar una entrada rompe la cadena y aquí se ve dónde. La cabeza se publica además fuera de MongoDB (archivo de anclas y webhook opcional).</p>
+    <div class="ledger-line" id="anchorInfo" style="margin-top:0">Cargando ancla…</div>
+    <div id="auditRecent"></div>
+  </section>
+
+  <section>
+    <h2>Llaves y personas</h2>
+    <p class="lead">Cada llave pertenece a una persona; para el cuarto ojos hacen falta personas distintas. Una llave perdida se revoca aquí y deja de valer al instante.</p>
+    <div id="credentials"></div>
+  </section>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtMoney = (minor, cur) =>
+  (minor === null || minor === undefined) ? '—' : (minor / 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + esc(cur);
+const fmtDate = (iso) => new Date(iso).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+const STAMP_LABEL = {
+  proposed: 'Propuesta', pending_signature: 'Pendiente', approved: 'Aprobada',
+  rejected: 'Bloqueada', expired: 'Expirada',
+};
+
+async function json(path, options = {}) {
+  const res = await fetch(path, options);
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+function toast(message, isError = false) {
+  const el = $('toast');
+  el.textContent = message;
+  el.className = isError ? 'err' : '';
+  el.style.display = 'block';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.style.display = 'none'; }, 3800);
+}
+
+function stamp(status) {
+  return '<span class="stamp ' + esc(status) + '">' + (STAMP_LABEL[status] ?? esc(status)) + '</span>';
+}
+
+/* ── resumen y cadena ─────────────────────────────────── */
+async function checkChain() {
+  const res = await json('/api/audit/verify');
+  const badge = $('chainBadge');
+  if (res.body.ok === true) {
+    badge.className = 'chain ok';
+    badge.textContent = 'cadena íntegra · ' + res.body.total + ' entradas';
+  } else {
+    badge.className = 'chain broken';
+    badge.textContent = 'cadena rota en la entrada ' + (res.body.firstBreak ?? '?');
+  }
+  return res.body;
+}
+
+async function loadLedger() {
+  const [stats, chain] = await Promise.all([json('/api/stats'), checkChain()]);
+  const s = stats.body.actions ?? {};
+  const parts = [
+    '<b>' + s.total + '</b> asientos',
+    '<b>' + (s.byStatus?.pending_signature ?? 0) + '</b> en espera de firma',
+    '<b>' + (s.byStatus?.approved ?? 0) + '</b> aprobadas',
+    '<b>' + (s.byStatus?.rejected ?? 0) + '</b> bloqueadas',
+    (chain.ok ? 'cadena íntegra' : 'cadena rota'),
+  ];
+  $('ledgerLine').innerHTML = parts.join(' <span style="color:#3b4450">·</span> ');
+}
+
+/* ── pendientes ───────────────────────────────────────── */
+async function loadPending() {
+  const res = await json('/api/actions/pending');
+  const box = $('pending');
+  const actions = res.body.actions ?? [];
+  if (actions.length === 0) {
+    box.innerHTML = '<p class="empty">No hay solicitudes pendientes. Los pagos grandes que propongan tus agentes aparecerán aquí — prueba <span class="mono">node scripts/smoke.mjs</span>.</p>';
+    return;
+  }
+  box.innerHTML = '<div class="table-scroll"><table><thead><tr>' +
+    '<th style="text-align:right">Importe</th><th>Tipo · destino</th><th>Motivo del motor</th><th>Firmas</th><th>Caduca</th>' +
+    '<th>Códigos de verificación (compara con /firmar)</th><th></th>' +
+    '</tr></thead><tbody>' +
+    actions.map((a) =>
+      '<tr>' +
+      '<td class="num">' + fmtMoney(a.amountMinor, a.currency) + '</td>' +
+      '<td>' + esc(a.actionType) + ' · <span class="mono">' + esc(a.destination) + '</span></td>' +
+      '<td style="max-width:340px">' + esc(a.decisions[0]?.reason ?? a.justification) + '</td>' +
+      '<td class="num">' + (a.signatures?.length ?? 0) + ' de ' + (a.requiredSignatures ?? 1) + '</td>' +
+      '<td class="nowrap">' + fmtDate(a.expiresAt) + '</td>' +
+      '<td class="codes" data-id="' + esc(a.id) + '">cargando…</td>' +
+      '<td class="nowrap"><a class="btn" href="/firmar">Abrir en firma</a></td>' +
+      '</tr>'
+    ).join('') +
+    '</tbody></table></div>';
+
+  for (const a of actions) {
+    const fp = await json('/api/actions/' + a.id + '/fingerprints');
+    const cell = box.querySelector('.codes[data-id="' + esc(a.id) + '"]');
+    if (!cell) continue;
+    cell.innerHTML = fp.status === 200
+      ? '<span class="mono">aprueba ' + fp.body.approve + '</span><br><span class="mono">rechaza ' + fp.body.reject + '</span>'
+      : '<span class="empty">' + esc(fp.body.error ?? 'sin códigos') + '</span>';
+  }
+}
+
+/* ── reglas ───────────────────────────────────────────── */
+const TYPE_LABEL = { payment: 'Pagos', reservation: 'Reservas', loan: 'Créditos', data_access: 'Datos' };
+let currentPolicy = null;
+
+async function loadPolicy() {
+  const res = await json('/api/policy');
+  currentPolicy = res.body.policy;
+  const p = currentPolicy;
+  $('policyBody').innerHTML = Object.entries(p.types).map(([type, t]) =>
+    '<tr data-type="' + esc(type) + '">' +
+    '<td>' + esc(TYPE_LABEL[type] ?? type) + ' <span class="mono">' + esc(type) + '</span></td>' +
+    '<td><input type="checkbox" class="p-allowed"' + (t.allowed ? ' checked' : '') + '></td>' +
+    '<td style="text-align:right"><input type="number" class="p-allow" min="0" step="0.01" value="' + (t.allowLimitMinor / 100).toFixed(2) + '"></td>' +
+    '<td style="text-align:right"><input type="number" class="p-sign" min="0" step="0.01" value="' + (t.signLimitMinor ? (t.signLimitMinor / 100).toFixed(2) : '') + '"></td>' +
+    '<td><input type="text" class="p-currencies" value="' + esc((t.currencies ?? []).join(', ')) + '"></td>' +
+    '<td><input type="text" class="p-roles" value="' + esc((t.quorumRoles ?? []).join(', ')) + '"></td>' +
+    '</tr>'
+  ).join('');
+  $('trustedInput').value = p.destinationTrusted.join('\n');
+  $('denyInput').value = p.destinationDeny.join('\n');
+  $('ttlInput').value = p.pendingTtlMinutes;
+  $('newDestCheck').checked = p.requireSignOnNewDestination;
+  $('policyVersion').textContent = 'versión actual: ' + p.version + ' · al guardar se creará la ' + (p.version + 1);
+  $('policyIssues').textContent = '';
+}
+
+const toMinor = (text) => {
+  if (text.trim() === '') return undefined;
+  const value = Number.parseFloat(text.replace(',', '.'));
+  return Number.isFinite(value) ? Math.round(value * 100) : Number.NaN;
+};
+
+$('savePolicy').addEventListener('click', async () => {
+  const types = {};
+  for (const row of $('policyBody').querySelectorAll('tr[data-type]')) {
+    const type = row.dataset.type;
+    const roles = row.querySelector('.p-roles').value.split(',').map((s) => s.trim()).filter(Boolean);
+    types[type] = {
+      allowed: row.querySelector('.p-allowed').checked,
+      allowLimitMinor: toMinor(row.querySelector('.p-allow').value),
+      signLimitMinor: toMinor(row.querySelector('.p-sign').value),
+      currencies: row.querySelector('.p-currencies').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
+      quorumRoles: roles.length > 0 ? roles : undefined,
+    };
+  }
+  const body = {
+    id: currentPolicy.id,
+    version: currentPolicy.version,
+    types,
+    destinationTrusted: $('trustedInput').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    destinationDeny: $('denyInput').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    pendingTtlMinutes: Number.parseInt($('ttlInput').value, 10),
+    requireSignOnNewDestination: $('newDestCheck').checked,
+  };
+  const res = await json('/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (res.status === 200) {
+    toast('Política actualizada a la versión ' + res.body.policy.version);
+    await loadPolicy();
+    await loadLedger();
+  } else {
+    $('policyIssues').textContent = res.body.error + '\n' + (res.body.issues ?? []).map((i) => i.path + ': ' + i.message).join('\n');
+    toast('No se pudo guardar: revisa las reglas', true);
+  }
+});
+
+/* ── historial ────────────────────────────────────────── */
+async function loadHistory() {
+  const params = new URLSearchParams();
+  if ($('filterStatus').value) params.set('status', $('filterStatus').value);
+  if ($('filterType').value) params.set('actionType', $('filterType').value);
+  if ($('filterAgent').value) params.set('agentId', $('filterAgent').value);
+  params.set('limit', '100');
+  const res = await json('/api/actions?' + params.toString());
+  const actions = res.body.actions ?? [];
+  const tbody = $('historyBody');
+  if (actions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty" style="border-bottom:0">Sin asientos con estos filtros.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = actions.map((a) =>
+    '<tr class="clickable" data-id="' + esc(a.id) + '">' +
+    '<td class="nowrap">' + fmtDate(a.createdAt) + '</td>' +
+    '<td class="num">' + fmtMoney(a.amountMinor, a.currency) + '</td>' +
+    '<td>' + esc(a.actionType) + ' · <span class="mono">' + esc(a.destination) + '</span></td>' +
+    '<td>' + esc(a.agentId) + '</td>' +
+    '<td>' + stamp(a.status) + '</td>' +
+    '</tr>'
+  ).join('');
+}
+
+async function toggleTrace(tr) {
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('trace')) {
+    existing.remove();
+    return;
+  }
+  const id = tr.dataset.id;
+  const res = await json('/api/audit/' + id);
+  const decisions = res.body.action?.decisions ?? [];
+  const entries = res.body.entries ?? [];
+  const row = document.createElement('tr');
+  row.className = 'trace';
+  const cell = document.createElement('td');
+  cell.colSpan = 5;
+  cell.innerHTML =
+    '<h4>Rastro embebido (decisiones)</h4><ul>' +
+    (decisions.length === 0 ? '<li>sin decisiones</li>' : decisions.map((d) =>
+      '<li>' + stamp(d.decision) + ' ' + esc(d.stage) + ' por <span class="mono">' + esc(d.by) + '</span> — ' + esc(d.reason ?? '') + ' <span class="mono">' + fmtDate(d.at) + '</span></li>'
+    ).join('')) +
+    '</ul><h4>Registro encadenado (' + entries.length + ' entradas)</h4><ul>' +
+    entries.map((e) =>
+      '<li>#' + e.seq + ' ' + esc(e.eventType) + ' por ' + esc(e.actor) + (e.reason ? ' — ' + esc(e.reason) : '') + ' <span class="mono">' + esc(e.contentHash.slice(0, 16)) + '…</span></li>'
+    ).join('') +
+    '</ul>';
+  row.appendChild(cell);
+  tr.insertAdjacentElement('afterend', row);
+}
+
+$('historyBody').addEventListener('click', (event) => {
+  const tr = event.target.closest('tr.clickable');
+  if (tr) toggleTrace(tr);
+});
+$('historyRefresh').addEventListener('click', loadHistory);
+for (const id of ['filterStatus', 'filterType']) {
+  $(id).addEventListener('change', loadHistory);
+}
+$('filterAgent').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') loadHistory();
+});
+
+/* ── auditoría reciente ───────────────────────────────── */
+async function loadAuditRecent() {
+  const res = await json('/api/audit?limit=8');
+  const entries = res.body.entries ?? [];
+  $('auditRecent').innerHTML = entries.length === 0
+    ? '<p class="empty">El registro está vacío: las primeras acciones de tus agentes lo estrenarán.</p>'
+    : '<div class="table-scroll"><table><thead><tr>' +
+      '<th>#</th><th>Evento</th><th>Actor</th><th>Motivo</th><th>Cuándo</th>' +
+      '</tr></thead><tbody>' +
+      entries.map((e) =>
+        '<tr><td class="num">' + e.seq + '</td>' +
+        '<td class="nowrap">' + esc(e.eventType) + '</td>' +
+        '<td><span class="mono">' + esc(e.actor.slice(0, 14)) + (e.actor.length > 14 ? '…' : '') + '</span></td>' +
+        '<td style="max-width:420px">' + esc(e.reason ?? '') + '</td>' +
+        '<td class="nowrap">' + fmtDate(e.at) + '</td></tr>'
+      ).join('') +
+      '</tbody></table></div>';
+}
+
+$('verifyBtn').addEventListener('click', async () => {
+  const body = await checkChain();
+  if (body.ok) {
+    toast('Cadena íntegra: ' + body.total + ' entradas verificadas.');
+  } else {
+    toast('Cadena rota en la entrada ' + body.firstBreak, true);
+  }
+  loadAuditRecent();
+  loadAnchor();
+});
+
+/* ── ancla externa ────────────────────────────────────── */
+async function loadAnchor() {
+  const res = await json('/api/audit/anchor');
+  const el = $('anchorInfo');
+  const s = res.body;
+  if (s.stale) {
+    el.innerHTML = '<strong style="color:var(--vermilion)">⚠ Sin anclajes recientes:</strong> ' + esc(s.staleReason ?? 'silencio prolongado en la copia externa');
+    return;
+  }
+  if (s.lastAttempt && s.lastAttempt.kind === 'failure') {
+    el.innerHTML =
+      '<strong style="color:var(--vermilion)">⚠ Último intento de anclaje falló:</strong> ' +
+      esc(s.lastAttempt.error) + ' — la cadena está íntegra, pero la copia externa se está quedando atrás.';
+    return;
+  }
+  if (s.lastAnchor) {
+    el.innerHTML =
+      'Ancla publicada fuera de Mongo: entrada <b>#' + s.lastAnchor.seq + '</b> · ' +
+      '<span class="mono">' + esc(s.lastAnchor.hash.slice(0, 16)) + '…</span> · ' +
+      fmtDate(s.lastAnchor.at);
+  } else if (s.head) {
+    el.innerHTML = 'Sin anclajes todavía — la cabeza actual es <span class="mono">' + esc(s.head.hash.slice(0, 16)) + '…</span>.';
+  } else {
+    el.innerHTML = 'El registro está vacío.';
+  }
+}
+
+/* ── llaves y personas ────────────────────────────────── */
+async function loadCredentials() {
+  const res = await json('/api/webauthn/credentials');
+  const credentials = res.body.credentials ?? [];
+  const box = $('credentials');
+  if (credentials.length === 0) {
+    box.innerHTML = '<p class="empty">No hay llaves registradas. Regístralas desde la página de firma.</p>';
+    return;
+  }
+  box.innerHTML = '<div class="table-scroll"><table><thead><tr>' +
+    '<th>Llave</th><th>Persona</th><th>Rol</th><th>Registrada</th><th>Estado</th><th></th>' +
+    '</tr></thead><tbody>' +
+    credentials.map((c) =>
+      '<tr>' +
+      '<td><span class="mono">' + esc(c.id.slice(0, 16)) + '…</span></td>' +
+      '<td>' + esc(c.userId) + '</td>' +
+      '<td>' + (c.role === 'autorizador' ? '<span class="stamp approved">autorizador</span>' : '<span class="stamp">' + esc(c.role ?? 'empleado') + '</span>') + '</td>' +
+      '<td class="nowrap">' + fmtDate(c.createdAt) + '</td>' +
+      '<td>' + (c.revokedAt ? '<span class="stamp rejected">Revocada</span>' : '<span class="stamp approved">Activa</span>') + '</td>' +
+      '<td class="nowrap">' + (c.revokedAt ? '' : '<button class="btn" data-revoke="' + esc(c.id) + '" type="button">Revocar</button>') + '</td>' +
+      '</tr>'
+    ).join('') +
+    '</tbody></table></div>';
+  for (const btn of box.querySelectorAll('button[data-revoke]')) {
+    btn.addEventListener('click', async () => {
+      const res2 = await json('/api/webauthn/credentials/' + encodeURIComponent(btn.dataset.revoke), { method: 'DELETE' });
+      if (res2.status === 200) {
+        toast('Llave revocada: ya no puede firmar nada.');
+        loadCredentials();
+      } else {
+        toast(res2.body.error ?? 'No se pudo revocar', true);
+      }
+    });
+  }
+}
+
+/* ── arranque ─────────────────────────────────────────── */
+loadLedger();
+loadPending();
+loadPolicy();
+loadHistory();
+loadAuditRecent();
+loadAnchor();
+loadCredentials();
+</script>
+</body>
+</html>

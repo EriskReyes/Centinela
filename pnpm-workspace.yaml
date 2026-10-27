@@ -1,0 +1,7 @@
+# Configuración de pnpm 11 (sustituye al campo "pnpm" de package.json).
+packages:
+  - "."
+# Layout plano (sin symlinks/junctions): imprescindible en este entorno Windows.
+nodeLinker: hoisted
+onlyBuiltDependencies:
+  - esbuild

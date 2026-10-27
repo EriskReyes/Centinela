@@ -1,0 +1,32 @@
+{
+  "name": "centinela",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Guardián human-in-the-loop para acciones de agentes de IA sobre dinero y datos de empresa: motor de reglas, firma WebAuthn y auditoría completa.",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/server.ts",
+    "start": "node --experimental-strip-types src/server.ts",
+    "test": "node --experimental-strip-types --test --experimental-test-isolation=none \"src/**/*.test.ts\"",
+    "test:watch": "node --experimental-strip-types --test --watch --experimental-test-isolation=none \"src/**/*.test.ts\"",
+    "demo:agent": "node scripts/smoke.mjs",
+    "demo:webauthn": "node --experimental-strip-types scripts/webauthn-demo.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.0.3",
+    "express": "^5.1.0",
+    "mongoose": "^8.9.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,337 @@
+/**
+ * Fase 3 — La API del guardián.
+ *
+ * El agente de IA propone una acción por POST /api/actions. Centinela:
+ *  1. valida la entrada (Zod) y asigna identidad y marca de tiempo,
+ *  2. consulta la política vigente y evalúa con el motor de reglas,
+ *  3. ejecuta (allow) o deja pendiente de firma (sign) o rechaza (block),
+ *  4. guarda la acción con su rastro de decisiones completo — siempre.
+ *
+ * Respuestas: 201 allow · 202 sign · 403 block · 400 validación · 404 no encontrada.
+ */
+import express from 'express';
+import { randomUUID } from 'node:crypto';
+import {
+  ACTION_STATUSES,
+  AgentActionSchema,
+  expirePendingAction,
+  type ActionStatus,
+  type AgentAction,
+  type NewAgentActionInput,
+} from '../domain/action.ts';
+import { applyEngineDecision, evaluateAction } from '../rules/engine.ts';
+import { PolicySchema } from '../rules/policy.ts';
+import { appendExecutionRecord, executeAction, type ExecutionResult } from '../execution/connector.ts';
+import { deriveIdempotencyKey } from './idempotency.ts';
+import type { ActionRepository } from './repository.ts';
+import type { PolicyProvider } from './policyProvider.ts';
+import { createAuthRouter, type AuthRouterDeps } from '../auth/routes.ts';
+import { createAuditRouter } from '../audit/routes.ts';
+import type { AuditService } from '../audit/service.ts';
+
+export interface AppDeps {
+  repository: ActionRepository;
+  policyProvider: PolicyProvider;
+  /** Reloj inyectable: los tests lo adelantan para probar expiraciones. */
+  now?: () => Date;
+  idFactory?: () => string;
+  execute?: (action: AgentAction, now: Date) => ExecutionResult;
+  /** Fase 4: rutas WebAuthn (registro de llaves y firma de acciones). */
+  auth?: AuthRouterDeps;
+  /** Fase 5: registro de auditoría (se registra TODO si está presente). */
+  audit?: AuditService;
+  /** Red de seguridad de idempotencia: ventana en segundos (por defecto 60). */
+  idempotencyWindowSeconds?: number;
+  /** Gancho para rutas extra ANTES del 404 final (estáticos de demo, etc.). */
+  decorate?: (app: express.Express) => void;
+}
+
+const MAX_LIST = 200;
+
+export function createApp(deps: AppDeps): express.Express {
+  const now = deps.now ?? (() => new Date());
+  const idFactory = deps.idFactory ?? randomUUID;
+  const execute = deps.execute ?? executeAction;
+
+  const app = express();
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '100kb' }));
+
+  app.get('/healthz', (_req, res) => {
+    res.json({ ok: true, service: 'centinela' });
+  });
+
+  app.post('/api/actions', async (req, res, next) => {
+    const headerKey = req.get('Idempotency-Key');
+    const explicitKey = typeof headerKey === 'string' && headerKey.length > 0 ? headerKey : undefined;
+    const body = (req.body ?? {}) as NewAgentActionInput;
+    // Clave explícita del agente, o derivada del contenido + ventana (red de seguridad).
+    const idempotencyKey =
+      explicitKey ?? deriveIdempotencyKey(body, now(), deps.idempotencyWindowSeconds ?? 60);
+    try {
+
+      const existing = await deps.repository.findByMetadataKey(idempotencyKey);
+      if (existing !== null) {
+        return res.status(200).json({ action: existing, replayed: true, idempotencyKey });
+      }
+
+      const input: NewAgentActionInput = {
+        ...body,
+        id: idFactory(),
+        status: 'proposed',
+        createdAt: now(),
+        decisions: [],
+        metadata: {
+          ...(typeof body.metadata === 'object' && body.metadata !== null ? body.metadata : {}),
+          ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+        },
+      };
+      const parsed = AgentActionSchema.safeParse(input);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'validación',
+          issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+        });
+      }
+      const proposed = parsed.data;
+
+      const policy = await deps.policyProvider.get();
+      const decision = evaluateAction(proposed, policy);
+      const decided = applyEngineDecision(proposed, decision, now(), idFactory);
+      const audit = deps.audit;
+
+      if (decision.decision === 'allow') {
+        const execution = execute(decided, now());
+        const executed = appendExecutionRecord(decided, execution, now(), idFactory);
+        await deps.repository.insert(executed);
+        if (audit !== undefined) {
+          const at = now();
+          await audit.append({
+            eventType: 'action_proposed',
+            actionId: executed.id,
+            actor: executed.agentId,
+            statusBefore: 'proposed',
+            statusAfter: 'proposed',
+            at,
+          });
+          await audit.append({
+            eventType: 'engine_decision',
+            actionId: executed.id,
+            actor: 'rules-engine',
+            decision: decision.decision,
+            statusBefore: 'proposed',
+            statusAfter: executed.status,
+            reason: decision.reasons.join(' | ') || undefined,
+            policyVersion: decision.policyVersion,
+            at,
+          });
+          await audit.append({
+            eventType: 'action_executed',
+            actionId: executed.id,
+            actor: execution.connector,
+            decision: execution.ok ? 'approved' : 'rejected',
+            statusBefore: decided.status,
+            statusAfter: executed.status,
+            reason: execution.detail,
+            at,
+          });
+        }
+        return res.status(201).json({ action: executed, decision: 'allow', execution, idempotencyKey });
+      }
+
+      await deps.repository.insert(decided);
+      if (audit !== undefined) {
+        const at = now();
+        await audit.append({
+          eventType: 'action_proposed',
+          actionId: decided.id,
+          actor: decided.agentId,
+          statusBefore: 'proposed',
+          statusAfter: 'proposed',
+          at,
+        });
+        await audit.append({
+          eventType: 'engine_decision',
+          actionId: decided.id,
+          actor: 'rules-engine',
+          decision: decision.decision,
+          statusBefore: 'proposed',
+          statusAfter: decided.status,
+          reason: decision.reasons.join(' | ') || undefined,
+          policyVersion: decision.policyVersion,
+          at,
+        });
+      }
+      if (decision.decision === 'sign') {
+        return res.status(202).json({
+          action: decided,
+          decision: 'sign',
+          reasons: decision.reasons,
+          expiresAt: decided.expiresAt,
+          idempotencyKey,
+        });
+      }
+      return res.status(403).json({ action: decided, decision: 'block', reasons: decision.reasons, idempotencyKey });
+    } catch (err) {
+      // Carrera entre dos envíos paralelos con la misma clave: el índice único
+      // ha rechazado el segundo; devolvemos la acción que ganó la carrera.
+      if ((err as { code?: number }).code === 11000) {
+        const existing = await deps.repository.findByMetadataKey(idempotencyKey);
+        if (existing !== null) {
+          return res.status(200).json({ action: existing, replayed: true, idempotencyKey });
+        }
+      }
+      next(err);
+    }
+  });
+
+  app.get('/api/actions/pending', async (_req, res, next) => {
+    try {
+      const current = now();
+      const pending = await deps.repository.listPending();
+      const active: AgentAction[] = [];
+      for (const action of pending) {
+        const updated = expirePendingAction(action, current, idFactory);
+        if (updated !== action) {
+          await deps.repository.replace(updated);
+          if (deps.audit !== undefined) {
+            await deps.audit.append({
+              eventType: 'action_expired',
+              actionId: updated.id,
+              actor: 'system',
+              decision: 'expired',
+              statusBefore: 'pending_signature',
+              statusAfter: 'expired',
+              reason: 'solicitud de firma expirada sin respuesta',
+              at: current,
+            });
+          }
+        }
+        if (updated.status === 'pending_signature') {
+          active.push(updated);
+        }
+      }
+      res.json({ actions: active, count: active.length });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/actions/:id', async (req, res, next) => {
+    try {
+      const action = await deps.repository.findById(req.params.id);
+      if (action === null) {
+        return res.status(404).json({ error: 'acción no encontrada' });
+      }
+      res.json({ action });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/actions', async (req, res, next) => {
+    try {
+      const rawStatus = typeof req.query.status === 'string' && req.query.status.length > 0 ? req.query.status : undefined;
+      if (rawStatus !== undefined && !(ACTION_STATUSES as readonly string[]).includes(rawStatus)) {
+        return res.status(400).json({ error: `estado '${rawStatus}' no válido`, valid: ACTION_STATUSES });
+      }
+      const rawLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 100;
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIST) : 100;
+      const actions = await deps.repository.list({
+        status: rawStatus as ActionStatus | undefined,
+        agentId: typeof req.query.agentId === 'string' ? req.query.agentId : undefined,
+        actionType: typeof req.query.actionType === 'string' ? req.query.actionType : undefined,
+        limit,
+      });
+      res.json({ actions, count: actions.length });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/policy', async (_req, res, next) => {
+    try {
+      res.json({ policy: await deps.policyProvider.get() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Fase 6: el panel ajusta los límites sin tocar código. La versión la asigna
+  // el servidor (la anterior + 1) y el cambio queda auditado.
+  app.put('/api/policy', async (req, res, next) => {
+    try {
+      const current = await deps.policyProvider.get();
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const parsed = PolicySchema.safeParse({ ...body, id: current.id, version: current.version + 1 });
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: 'validación',
+          issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+        });
+      }
+      const saved = await deps.policyProvider.set(parsed.data);
+      if (deps.audit !== undefined) {
+        await deps.audit.append({
+          eventType: 'policy_updated',
+          actionId: saved.id,
+          actor: 'admin-panel',
+          reason: `política actualizada a la versión ${saved.version}`,
+          policyVersion: saved.version,
+          at: now(),
+        });
+      }
+      res.json({ policy: saved });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Fase 6: resumen para el panel.
+  app.get('/api/stats', async (_req, res, next) => {
+    try {
+      const actions = await deps.repository.list({ limit: 1000 });
+      const byStatus: Record<string, number> = {};
+      const byType: Record<string, number> = {};
+      for (const action of actions) {
+        byStatus[action.status] = (byStatus[action.status] ?? 0) + 1;
+        byType[action.actionType] = (byType[action.actionType] ?? 0) + 1;
+      }
+      let audit: { total: number; ok: boolean } | undefined;
+      if (deps.audit !== undefined) {
+        const verification = await deps.audit.verify();
+        audit = { total: verification.total, ok: verification.ok };
+      }
+      res.json({ actions: { total: actions.length, byStatus, byType }, audit });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  if (deps.auth !== undefined) {
+    app.use('/api', createAuthRouter(deps.auth));
+  }
+
+  if (deps.audit !== undefined) {
+    app.use('/api', createAuditRouter({ audit: deps.audit, repository: deps.repository }));
+  }
+
+  deps.decorate?.(app);
+
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'ruta no encontrada' });
+  });
+
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // Errores con código HTTP propio (AuthError, etc.): se exponen tal cual.
+    const status = typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 500;
+    if (status >= 400 && status < 500) {
+      res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    console.error('[centinela] error no controlado:', err);
+    res.status(500).json({ error: 'error interno', detail: err instanceof Error ? err.message : String(err) });
+  });
+
+  return app;
+}

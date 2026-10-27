@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Centinela · Firmar</title>
+<script src="/webauthn.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #0b0f14; color: #e6edf3; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: #8b98a5; margin-bottom: 24px; }
+  h2 { font-size: 1.05rem; border-bottom: 1px solid #232b36; padding-bottom: 8px; margin-top: 32px; }
+  .card { background: #11161d; border: 1px solid #232b36; border-radius: 10px; padding: 16px; margin: 12px 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .big { font-size: 1.2rem; font-weight: 700; }
+  .meta { color: #8b98a5; font-size: .85rem; margin-top: 4px; }
+  .reason { color: #d29922; font-size: .85rem; margin-top: 8px; }
+  button { background: #1f6feb; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: .95rem; cursor: pointer; }
+  button.secondary { background: #30363d; }
+  button.danger { background: #7a2e2e; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { margin-top: 12px; font-size: .9rem; min-height: 1.2em; }
+  .ok { color: #3fb950; } .err { color: #f85149; }
+  .empty { color: #8b98a5; }
+  code { background: #1a2129; padding: 2px 6px; border-radius: 6px; font-size: .85em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛡️ Centinela · Firmar</h1>
+  <div class="sub">El guardián entre tus agentes de IA y el dinero de tu empresa. Abre esta página en <code>http://localhost:4000/firmar</code> (con <code>localhost</code>, no con 127.0.0.1: así lo exige el RP ID de WebAuthn).</div>
+
+  <h2>1 · Registrar tu llave (una vez)</h2>
+  <div class="card">
+    <label style="display:block;margin-bottom:10px;color:#8b98a5;font-size:.9rem">¿Quién se registra o firma?
+      <select id="who" style="margin-left:8px">
+        <option value="maria">María (autorizador)</option>
+        <option value="ana">Ana (autorizador)</option>
+        <option value="carlos">Carlos (empleado)</option>
+      </select>
+    </label>
+    <button id="register">Registrar llave (huella / Windows Hello / llave USB)</button>
+    <div class="msg" id="registerMsg"></div>
+  </div>
+
+  <h2>2 · Solicitudes pendientes de tu firma</h2>
+  <div id="queue"><div class="empty">Cargando…</div></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
+// DEMO: en producción los roles los asigna un administrador, no el usuario.
+const ROLE_BY_USER = { maria: 'autorizador', ana: 'autorizador', carlos: 'empleado' };
+
+function fmt(minor, currency) {
+  const major = Math.floor(minor / 100);
+  const rest = String(minor % 100).padStart(2, '0');
+  return major + '.' + rest + ' ' + currency;
+}
+
+async function json(path, options = {}) {
+  const res = await fetch(path, options);
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+$('register').addEventListener('click', async () => {
+  const btn = $('register');
+  btn.disabled = true;
+  setMsg('registerMsg', 'Pidiendo opciones…', true);
+  const userId = $('who').value;
+  try {
+    const opts = await json('/api/webauthn/register/options', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId }),
+    });
+    if (opts.status !== 200) throw new Error(opts.body.error ?? 'error');
+    const attestation = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON: opts.body.options });
+    const verified = await json('/api/webauthn/register/verify', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId, role: ROLE_BY_USER[userId] ?? 'empleado', response: attestation }),
+    });
+    if (verified.status !== 201) throw new Error(verified.body.error ?? 'verificación fallida');
+    setMsg('registerMsg', 'Llave registrada ✓ (' + verified.body.credentialId.slice(0, 12) + '…)', true);
+    loadQueue();
+  } catch (err) {
+    setMsg('registerMsg', err.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function loadQueue() {
+  const queue = $('queue');
+  const res = await json('/api/actions/pending');
+  if (res.body.actions.length === 0) {
+    queue.innerHTML = '<div class="empty">No hay solicitudes pendientes. Propón un pago grande con <code>node scripts/smoke.mjs</code> y recarga.</div>';
+    return;
+  }
+  queue.innerHTML = '';
+  for (const action of res.body.actions) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const amount = action.amountMinor !== undefined && action.amountMinor !== null
+      ? fmt(action.amountMinor, action.currency)
+      : action.currency;
+    const progress = (action.requiredSignatures ?? 1) > 1
+      ? 'firmas: ' + (action.signatures?.length ?? 0) + ' de ' + (action.requiredSignatures ?? 1) + ' · '
+      : '';
+    card.innerHTML =
+      '<div class="row"><span class="big">' + amount + '</span><span class="meta">' + action.actionType + ' · ' + action.destination + '</span></div>' +
+      '<div class="meta">' + progress + action.agentId + ' · ' + new Date(action.createdAt).toLocaleString() + '</div>' +
+      '<div class="reason">' + (action.decisions[0] && action.decisions[0].reason ? action.decisions[0].reason : '') + '</div>' +
+      '<div class="row" style="margin-top:12px">' +
+        '<button class="secondary" data-act="approve">✔ Aprobar y firmar</button>' +
+        '<button class="danger" data-act="reject">✖ Rechazar y firmar</button>' +
+      '</div><div class="msg"></div>';
+    card.querySelectorAll('button').forEach((btn) =>
+      btn.addEventListener('click', () => decide(action.id, btn.dataset.act, btn, card.querySelector('.msg'))));
+    queue.appendChild(card);
+  }
+}
+
+async function decide(actionId, decision, btn, msgEl) {
+  btn.disabled = true;
+  msgEl.textContent = 'Preparando reto…';
+  msgEl.className = 'msg';
+  const userId = $('who').value;
+  try {
+    const opts = await json('/api/actions/' + actionId + '/sign/options', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision, userId }),
+    });
+    if (opts.status !== 200) throw new Error(opts.body.error ?? 'error');
+
+    // Canal cruzado activo: TECLEA el código que muestra el panel en OTRO
+    // dispositivo. La huella sale del reto real; sin el código correcto no
+    // se llega a pedir la huella/PIN.
+    const code = opts.body.fingerprint;
+    const confirmed = await new Promise((resolve) => {
+      msgEl.className = 'msg';
+      msgEl.innerHTML =
+        '<strong>Teclea el código de verificación del panel</strong>' +
+        '<div style="margin-top:8px">En el panel (otro dispositivo), esta acción muestra un código para ' +
+        (decision === 'approve' ? '«aprueba»' : '«rechaza»') + '. Tecleálo aquí:</div>' +
+        '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<input id="codeInput" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19" autocomplete="off" style="text-transform:uppercase;width:200px">' +
+        '<button id="confirmGo" class="secondary" style="font-size:.85rem">Confirmar código</button>' +
+        '<button id="confirmNo" class="danger" style="font-size:.85rem">Cancelar</button>' +
+        '</div>' +
+        '<div class="msg err" id="codeError" style="margin-top:8px"></div>';
+      $('confirmGo').addEventListener('click', () => {
+        const typed = $('codeInput').value.trim().toUpperCase();
+        if (typed !== String(code).toUpperCase()) {
+          $('codeError').textContent = 'El código no coincide. No firmes — verifica con el panel.';
+          return;
+        }
+        resolve(true);
+      });
+      $('confirmNo').addEventListener('click', () => resolve(false));
+    });
+    if (!confirmed) {
+      msgEl.textContent = 'Firma cancelada: código no confirmado.';
+      msgEl.className = 'msg err';
+      btn.disabled = false;
+      return;
+    }
+
+    msgEl.textContent = 'Pidiendo tu huella/PIN…';
+    msgEl.className = 'msg';
+    const assertion = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: opts.body.options });
+    const verified = await json('/api/actions/' + actionId + '/sign/verify', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision, userId, response: assertion }),
+    });
+    if (verified.status !== 200) throw new Error(verified.body.error ?? 'verificación fallida');
+    msgEl.textContent = verified.body.action.status === 'approved'
+      ? 'Aprobada y firmada ✓'
+      : 'Firma registrada ✓ (' + (verified.body.action.signatures?.length ?? 1) + ' de ' + (verified.body.action.requiredSignatures ?? 1) + ') — falta otra persona';
+    msgEl.className = 'msg ok';
+    loadQueue();
+  } catch (err) {
+    msgEl.textContent = err.message;
+    msgEl.className = 'msg err';
+    btn.disabled = false;
+  }
+}
+
+loadQueue();
+</script>
+</body>
+</html>
