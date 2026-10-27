@@ -28,6 +28,14 @@ export const TypePolicySchema = z.object({
    * la acción deben venir de llaves con uno de estos roles (403 si no).
    */
   quorumRoles: z.array(z.string().min(1)).optional(),
+  /**
+   * Tope de gasto aprobado SIN firma por un mismo agente dentro de la ventana
+   * (misma moneda). Si la acción lo haría superar → requiere firma. Corta el
+   * fraccionamiento: 20 pagos de 99 € no pasan por debajo del radar.
+   */
+  cumulativeAllowLimitMinor: z.number().int().nonnegative().optional(),
+  /** Ventana del tope acumulado, en minutos. */
+  cumulativeWindowMinutes: z.number().int().positive().optional(),
 });
 export type TypePolicy = z.infer<typeof TypePolicySchema>;
 
@@ -80,6 +88,14 @@ export const PolicySchema = z
           message: `quorumRoles exige definir quorumSignatures (${type})`,
         });
       }
+      // El tope acumulado y su ventana van juntos: uno sin el otro no significa nada.
+      if ((typePolicy.cumulativeAllowLimitMinor === undefined) !== (typePolicy.cumulativeWindowMinutes === undefined)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['types', type, 'cumulativeWindowMinutes'],
+          message: `cumulativeAllowLimitMinor y cumulativeWindowMinutes se definen juntos (${type})`,
+        });
+      }
       if (
         typePolicy.quorumAboveMinor !== undefined &&
         typePolicy.signLimitMinor !== undefined &&
@@ -113,12 +129,17 @@ export const DEFAULT_POLICY: Policy = {
       quorumSignatures: 2,
       quorumAboveMinor: 500_00,
       quorumRoles: ['autorizador'],
+      // Como mucho 300,00 € al día sin firma por agente, aunque cada pago sea pequeño.
+      cumulativeAllowLimitMinor: 300_00,
+      cumulativeWindowMinutes: 24 * 60,
     },
     reservation: {
       allowed: true,
       allowLimitMinor: 50_00,
       signLimitMinor: 500_00,
       currencies: ['EUR', 'USD', 'CHF'],
+      cumulativeAllowLimitMinor: 150_00,
+      cumulativeWindowMinutes: 24 * 60,
     },
     loan: { allowed: false },
     data_access: { allowed: true },

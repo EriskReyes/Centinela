@@ -16,6 +16,7 @@ import type { RelyingParty } from '../auth/webauthnService.ts';
 import { InMemoryAuditRepository } from './repository.ts';
 import { createAuditService } from './service.ts';
 import { DEFAULT_POLICY } from '../rules/policy.ts';
+import { TEST_ACCESS, authedFetch } from '../api/testAccess.ts';
 
 const RP: RelyingParty = { rpName: 'Centinela', rpID: 'localhost', origin: 'http://localhost:4000' };
 
@@ -48,6 +49,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
     },
   };
   const app: Express = createApp({
+    access: TEST_ACCESS,
     repository,
     policyProvider: new InMemoryPolicyProvider(DEFAULT_POLICY),
     now: clock.now,
@@ -59,7 +61,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = async (path: string, body: unknown) => {
-    const res = await fetch(`${base}${path}`, {
+    const res = await authedFetch(`${base}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -67,7 +69,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
     return { status: res.status, body: (await res.json()) as Record<string, any> };
   };
   const get = async (path: string) => {
-    const res = await fetch(`${base}${path}`);
+    const res = await authedFetch(`${base}${path}`);
     return { status: res.status, body: (await res.json()) as Record<string, any> };
   };
   try {
@@ -187,7 +189,7 @@ describe('el registro captura todo', () => {
 
   it('los cambios de política también quedan auditados', async () => {
     await withHarness(async (h) => {
-      const current = (await (await fetch(`${h.base}/api/policy`)).json()) as {
+      const current = (await (await authedFetch(`${h.base}/api/policy`)).json()) as {
         policy: { id: string; version: number; types: { payment: { allowLimitMinor: number } } };
       };
       const updated = {
@@ -197,7 +199,7 @@ describe('el registro captura todo', () => {
           payment: { ...current.policy.types.payment, allowLimitMinor: 900_00 },
         },
       };
-      const res = await fetch(`${h.base}/api/policy`, {
+      const res = await authedFetch(`${h.base}/api/policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(updated),

@@ -17,6 +17,7 @@ import { FakeAuthenticator } from '../auth/testkit.ts';
 import type { RelyingParty } from '../auth/webauthnService.ts';
 import { MongoAuditRepository } from '../audit/repository.ts';
 import { createAuditService } from '../audit/service.ts';
+import { TEST_ACCESS, authedFetch } from './testAccess.ts';
 
 const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://127.0.0.1:27017/centinela_test';
 
@@ -68,13 +69,13 @@ describe('integración real con MongoDB', { skip: !available }, () => {
   });
 
   it('guarda, decide y consulta acciones en MongoDB (flujo completo)', async () => {
-    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider() });
+    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider(), access: TEST_ACCESS });
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const post = (body: unknown) =>
-        fetch(`${base}/api/actions`, {
+        authedFetch(`${base}/api/actions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
@@ -92,13 +93,13 @@ describe('integración real con MongoDB', { skip: !available }, () => {
       const blocked = await post(pay({ destination: 'crypto:binance' }));
       assert.equal(blocked.status, 403);
 
-      const pending = (await (await fetch(`${base}/api/actions/pending`)).json()) as { actions: Array<{ id: string }> };
+      const pending = (await (await authedFetch(`${base}/api/actions/pending`)).json()) as { actions: Array<{ id: string }> };
       assert.equal(pending.actions.length, 1);
 
-      const list = (await (await fetch(`${base}/api/actions?limit=10`)).json()) as { actions: unknown[] };
+      const list = (await (await authedFetch(`${base}/api/actions?limit=10`)).json()) as { actions: unknown[] };
       assert.equal(list.actions.length, 3);
 
-      const policy = (await (await fetch(`${base}/api/policy`)).json()) as { policy: { id: string; version: number } };
+      const policy = (await (await authedFetch(`${base}/api/policy`)).json()) as { policy: { id: string; version: number } };
       assert.equal(policy.policy.id, 'policy-pyme-demo');
       assert.equal(policy.policy.version, 1);
 
@@ -111,14 +112,14 @@ describe('integración real con MongoDB', { skip: !available }, () => {
   });
 
   it('hace valer la idempotencia también en MongoDB', async () => {
-    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider() });
+    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider(), access: TEST_ACCESS });
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const headers = { 'content-type': 'application/json', 'Idempotency-Key': 'clave-mongo-1' };
-      const first = await fetch(`${base}/api/actions`, { method: 'POST', headers, body: JSON.stringify(pay()) });
-      const second = await fetch(`${base}/api/actions`, { method: 'POST', headers, body: JSON.stringify(pay()) });
+      const first = await authedFetch(`${base}/api/actions`, { method: 'POST', headers, body: JSON.stringify(pay()) });
+      const second = await authedFetch(`${base}/api/actions`, { method: 'POST', headers, body: JSON.stringify(pay()) });
       assert.equal(first.status, 201);
       assert.equal(second.status, 200);
       const a = (await first.json()) as { action: { id: string } };
@@ -135,6 +136,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const credentials = new MongoCredentialRepository();
     const challenges = new MongoChallengeRepository();
     const app = createApp({
+      access: TEST_ACCESS,
       repository,
       policyProvider: new MongoPolicyProvider(),
       auth: { repository, credentials, challenges, rp: RP },
@@ -144,7 +146,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const post = async (path: string, body: unknown) => {
-        const res = await fetch(`${base}${path}`, {
+        const res = await authedFetch(`${base}${path}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
@@ -209,6 +211,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const repository = new MongoActionRepository();
     const audit = createAuditService({ repository: new MongoAuditRepository() });
     const app = createApp({
+      access: TEST_ACCESS,
       repository,
       policyProvider: new MongoPolicyProvider(),
       audit,
@@ -218,7 +221,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const post = (body: unknown) =>
-        fetch(`${base}/api/actions`, {
+        authedFetch(`${base}/api/actions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
@@ -232,7 +235,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
       assert.equal(await AuditModel.countDocuments(), 7);
 
       // La cadena verifica íntegra.
-      const verify = (await (await fetch(`${base}/api/audit/verify`)).json()) as {
+      const verify = (await (await authedFetch(`${base}/api/audit/verify`)).json()) as {
         ok: boolean;
         total: number;
         firstBreak: number | null;
@@ -242,7 +245,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
 
       // Un atacante altera el motivo de la entrada 3.
       await AuditModel.updateOne({ seq: 3 }, { $set: { reason: 'manipulado' } });
-      const broken = (await (await fetch(`${base}/api/audit/verify`)).json()) as {
+      const broken = (await (await authedFetch(`${base}/api/audit/verify`)).json()) as {
         ok: boolean;
         firstBreak: number | null;
       };
@@ -250,7 +253,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
       assert.equal(broken.firstBreak, 3);
 
       // El listado con filtro funciona contra Mongo.
-      const filtered = (await (await fetch(`${base}/api/audit?eventType=engine_decision&limit=20`)).json()) as {
+      const filtered = (await (await authedFetch(`${base}/api/audit?eventType=engine_decision&limit=20`)).json()) as {
         entries: unknown[];
       };
       assert.equal(filtered.entries.length, 3);
@@ -263,6 +266,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const repository = new MongoActionRepository();
     const audit = createAuditService({ repository: new MongoAuditRepository() });
     const app = createApp({
+      access: TEST_ACCESS,
       repository,
       policyProvider: new MongoPolicyProvider(),
       audit,
@@ -272,7 +276,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const post = (body: unknown) =>
-        fetch(`${base}/api/actions`, {
+        authedFetch(`${base}/api/actions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'Idempotency-Key': uniqueKey() },
           body: JSON.stringify(body),
@@ -283,15 +287,15 @@ describe('integración real con MongoDB', { skip: !available }, () => {
       assert.equal(before.status, 202);
 
       // El panel sube el límite de aprobación automática a 600,00 EUR.
-      const policy = (await (await fetch(`${base}/api/policy`)).json()) as { policy: Record<string, any> };
+      const policy = (await (await authedFetch(`${base}/api/policy`)).json()) as { policy: Record<string, any> };
       const updated = {
         ...policy.policy,
         types: {
           ...policy.policy.types,
-          payment: { ...policy.policy.types.payment, allowLimitMinor: 600_00 },
+          payment: { ...policy.policy.types.payment, allowLimitMinor: 600_00, cumulativeAllowLimitMinor: 600_00 },
         },
       };
-      const put = await fetch(`${base}/api/policy`, {
+      const put = await authedFetch(`${base}/api/policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(updated),
@@ -311,13 +315,16 @@ describe('integración real con MongoDB', { skip: !available }, () => {
   });
 
   it('la idempotencia derivada (sin header) evita duplicados también en Mongo', async () => {
-    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider() });
+    // Los tests anteriores ya acumularon gasto sin firma para este agente:
+    // se parte de cero para que el tope acumulado no interfiera.
+    await ActionModel.deleteMany({});
+    const app = createApp({ repository: new MongoActionRepository(), policyProvider: new MongoPolicyProvider(), access: TEST_ACCESS });
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const post = (body: unknown) =>
-        fetch(`${base}/api/actions`, {
+        authedFetch(`${base}/api/actions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
@@ -332,7 +339,7 @@ describe('integración real con MongoDB', { skip: !available }, () => {
       assert.equal(b.replayed, true);
       assert.equal(a.action.id, b.action.id);
 
-      const list = (await (await fetch(`${base}/api/actions?limit=100`)).json()) as { actions: Array<{ id: string }> };
+      const list = (await (await authedFetch(`${base}/api/actions?limit=100`)).json()) as { actions: Array<{ id: string }> };
       assert.equal(list.actions.filter((x) => x.id === a.action.id).length, 1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -13,6 +13,7 @@ import { createApp } from './app.ts';
 import { InMemoryActionRepository, type ActionRepository } from './repository.ts';
 import { InMemoryPolicyProvider } from './policyProvider.ts';
 import { DEFAULT_POLICY, type Policy } from '../rules/policy.ts';
+import { TEST_ACCESS, authedFetch } from './testAccess.ts';
 interface Harness {
   base: string;
   repo: ActionRepository;
@@ -32,6 +33,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>, policy: Policy = D
   let counter = 0;
   const repo = new InMemoryActionRepository();
   const app: Express = createApp({
+    access: TEST_ACCESS,
     repository: repo,
     policyProvider: new InMemoryPolicyProvider(policy),
     now: clock.now,
@@ -47,12 +49,12 @@ async function withHarness(fn: (h: Harness) => Promise<void>, policy: Policy = D
       repo,
       clock,
       post: (body, headers = {}) =>
-        fetch(`${base}/api/actions`, {
+        authedFetch(`${base}/api/actions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', ...headers },
           body: JSON.stringify(body),
         }),
-      get: (path) => fetch(`${base}${path}`),
+      get: (path) => authedFetch(`${base}${path}`),
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -273,10 +275,10 @@ describe('Fase 6: política editable y estadísticas', () => {
         ...current.policy,
         types: {
           ...current.policy.types,
-          payment: { ...current.policy.types.payment, allowLimitMinor: 600_00 },
+          payment: { ...current.policy.types.payment, allowLimitMinor: 600_00, cumulativeAllowLimitMinor: 600_00 },
         },
       };
-      const res = await fetch(`${h.base}/api/policy`, {
+      const res = await authedFetch(`${h.base}/api/policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(updated),
@@ -303,7 +305,7 @@ describe('Fase 6: política editable y estadísticas', () => {
           payment: { ...current.policy.types.payment, allowLimitMinor: 50_00, signLimitMinor: 50_00 },
         },
       };
-      const res = await fetch(`${h.base}/api/policy`, {
+      const res = await authedFetch(`${h.base}/api/policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(bad),

@@ -39,7 +39,16 @@ export function matchesPattern(value: string, pattern: string): boolean {
   return value === pattern;
 }
 
-export function evaluateAction(action: AgentAction, policy: Policy): EngineDecisionResult {
+/**
+ * Lo que el motor necesita saber del pasado. Lo calcula quien llama (la API
+ * consulta el repositorio); el motor sigue siendo puro y sin base de datos.
+ */
+export interface EvaluationContext {
+  /** Suma de lo que ESTE agente ya ejecutó sin firma en la ventana (misma moneda y tipo). */
+  autoApprovedInWindowMinor: number;
+}
+
+export function evaluateAction(action: AgentAction, policy: Policy, context: EvaluationContext): EngineDecisionResult {
   const reasonsByLevel: Record<EngineDecision, string[]> = { allow: [], sign: [], block: [] };
   const block = (reason: string) => reasonsByLevel.block.push(reason);
   const sign = (reason: string) => reasonsByLevel.sign.push(reason);
@@ -96,6 +105,13 @@ export function evaluateAction(action: AgentAction, policy: Policy): EngineDecis
           typePolicy.quorumAboveMinor !== undefined && amount > typePolicy.quorumAboveMinor
             ? (typePolicy.quorumSignatures ?? 1)
             : 1;
+      }
+      // Tope acumulado: pagos pequeños sueltos no pueden sumar un pago grande sin firma.
+      const cumulativeLimit = typePolicy.cumulativeAllowLimitMinor;
+      if (cumulativeLimit !== undefined && context.autoApprovedInWindowMinor + amount > cumulativeLimit) {
+        sign(
+          `gasto sin firma acumulado de '${action.agentId}' (${fmtMinor(context.autoApprovedInWindowMinor, action.currency)} + ${fmtMinor(amount, action.currency)}) supera el tope de ${fmtMinor(cumulativeLimit, action.currency)} en ${typePolicy.cumulativeWindowMinutes} min`,
+        );
       }
     }
   }

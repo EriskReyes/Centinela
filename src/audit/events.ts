@@ -19,6 +19,7 @@ export const AUDIT_EVENT_TYPES = [
   'policy_updated',
   'credential_revoked',
   'anchor_failed',
+  'access_denied',
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import { createApp } from './api/app.ts';
+import { generateToken, parseAgentTokens, validateAccessConfig, type AccessConfig } from './api/access.ts';
 import { MongoActionRepository } from './api/mongoRepository.ts';
 import { InMemoryPolicyProvider, MongoPolicyProvider, type PolicyProvider } from './api/policyProvider.ts';
 import { InMemoryActionRepository, type ActionRepository } from './api/repository.ts';
@@ -41,6 +42,23 @@ const PORT = Number(process.env.PORT ?? 4000);
 const HOST = process.env.HOST ?? '127.0.0.1';
 const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://127.0.0.1:27017/centinela';
 const STORE = process.env.CENTINELA_STORE ?? 'mongo';
+
+// Fase 8: tokens separados para el agente y para el admin (panel y firma).
+// Sin configurar → se generan al vuelo SOLO para desarrollo y se imprimen una vez.
+const adminFromEnv = process.env.CENTINELA_ADMIN_TOKEN;
+const agentsFromEnv = process.env.CENTINELA_AGENT_TOKENS;
+const generatedTokens = adminFromEnv === undefined || agentsFromEnv === undefined;
+const adminToken = adminFromEnv ?? generateToken();
+let agentTokens: Record<string, string>;
+let access: AccessConfig;
+try {
+  agentTokens = agentsFromEnv !== undefined ? parseAgentTokens(agentsFromEnv) : { 'agente-compras': generateToken() };
+  access = { adminToken, agentTokens };
+  validateAccessConfig(access);
+} catch (err) {
+  console.error('[centinela] Configuración de acceso inválida:', err instanceof Error ? err.message : err);
+  process.exit(1);
+}
 
 const rp: RelyingParty = {
   rpName: process.env.RP_NAME ?? 'Centinela',
@@ -101,6 +119,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const app = createApp({
   repository,
   policyProvider,
+  access,
   audit,
   idempotencyWindowSeconds: Number(process.env.IDEMPOTENCY_WINDOW_SECONDS ?? 60),
   auth: { repository, credentials, challenges, rp, audit },
@@ -128,5 +147,13 @@ app.listen(PORT, HOST, () => {
   console.log(`Panel (libro mayor): http://localhost:${PORT}/panel`);
   if (HOST !== '127.0.0.1') {
     console.warn('[centinela] El servidor está expuesto a la red: asegúrate de usar HTTPS y un RP_ID de dominio real.');
+  }
+  if (generatedTokens) {
+    console.warn('[centinela] Tokens generados para ESTA ejecución (define CENTINELA_ADMIN_TOKEN y CENTINELA_AGENT_TOKENS en .env):');
+    console.warn(`  admin (panel y firma):  ${adminToken}`);
+    for (const [agentId, token] of Object.entries(agentTokens)) {
+      console.warn(`  agente '${agentId}':  ${token}`);
+    }
+    console.warn('[centinela] Nunca le des el token de admin al agente.');
   }
 });

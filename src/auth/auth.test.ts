@@ -19,6 +19,7 @@ import type { RelyingParty } from './webauthnService.ts';
 import { FakeAuthenticator, tamperAssertion } from './testkit.ts';
 import { challengeFingerprint, challengeForAction } from './signing.ts';
 import { DEFAULT_POLICY } from '../rules/policy.ts';
+import { TEST_ACCESS, authedFetch } from '../api/testAccess.ts';
 
 const RP: RelyingParty = { rpName: 'Centinela', rpID: 'localhost', origin: 'http://localhost:4000' };
 
@@ -44,6 +45,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
     },
   };
   const app: Express = createApp({
+    access: TEST_ACCESS,
     repository,
     policyProvider: new InMemoryPolicyProvider(DEFAULT_POLICY),
     now: clock.now,
@@ -54,7 +56,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
-    const res = await fetch(`${base}${path}`, {
+    const res = await authedFetch(`${base}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
@@ -62,7 +64,7 @@ async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
     return { status: res.status, body: (await res.json()) as Record<string, any> };
   };
   const get = async (path: string) => {
-    const res = await fetch(`${base}${path}`);
+    const res = await authedFetch(`${base}${path}`);
     return { status: res.status, body: (await res.json()) as Record<string, any> };
   };
   try {
@@ -209,7 +211,7 @@ describe('firma de acciones', () => {
       assert.ok(String(second.body.error).includes('reutilizando una firma'));
 
       // Y nadie aprobó nada: la acción sigue pendiente.
-      const action = (await (await fetch(`${h.base}/api/actions/${actionId}`)).json()) as {
+      const action = (await (await authedFetch(`${h.base}/api/actions/${actionId}`)).json()) as {
         action: { status: string };
       };
       assert.equal(action.action.status, 'pending_signature');
@@ -271,7 +273,7 @@ describe('firma de acciones', () => {
       const res = await h.post(`/api/actions/${actionId}/sign/options`, { decision: 'approve' });
       assert.equal(res.status, 409);
       assert.ok(String(res.body.error).includes('expiró'));
-      const after = (await (await fetch(`${h.base}/api/actions/${actionId}`)).json()) as {
+      const after = (await (await authedFetch(`${h.base}/api/actions/${actionId}`)).json()) as {
         action: { status: string };
       };
       assert.equal(after.action.status, 'expired');
@@ -564,7 +566,7 @@ describe('revocación de llaves (llave perdida)', () => {
       assert.equal(list.body.credentials.length, 1);
       const credentialId = list.body.credentials[0].id as string;
 
-      const revoked = await fetch(`${h.base}/api/webauthn/credentials/${encodeURIComponent(credentialId)}`, {
+      const revoked = await authedFetch(`${h.base}/api/webauthn/credentials/${encodeURIComponent(credentialId)}`, {
         method: 'DELETE',
       });
       assert.equal(revoked.status, 200);
@@ -582,7 +584,7 @@ describe('revocación de llaves (llave perdida)', () => {
 
   it('revocar una llave inexistente devuelve 404', async () => {
     await withHarness(async (h) => {
-      const res = await fetch(`${h.base}/api/webauthn/credentials/no-existe`, { method: 'DELETE' });
+      const res = await authedFetch(`${h.base}/api/webauthn/credentials/no-existe`, { method: 'DELETE' });
       assert.equal(res.status, 404);
     });
   });

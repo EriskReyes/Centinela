@@ -38,13 +38,16 @@ API Centinela (Express · TypeScript · Node ≥ 22.6)
 pnpm install
 pnpm dev                       # http://localhost:4000 (Mongo local)
 # panel (libro mayor): localhost:4000/panel · firma: localhost:4000/firmar
-pnpm test                      # 179 pruebas, incluida la integración con Mongo
+pnpm test                      # 204 pruebas, incluida la integración con Mongo
 ```
 
-Demos sin navegador: `pnpm demo:agent` (un agente propone pagos) y `pnpm demo:webauthn` (firma completa con criptografía real).
+Al arrancar sin `CENTINELA_ADMIN_TOKEN` / `CENTINELA_AGENT_TOKENS`, el servidor imprime unos tokens válidos solo para esa ejecución: el panel y `/firmar` piden el de admin.
+
+Demos sin navegador (exporta `CENTINELA_AGENT_TOKEN` y `CENTINELA_ADMIN_TOKEN`): `pnpm demo:agent` (un agente propone pagos) y `pnpm demo:webauthn` (firma completa con criptografía real).
 
 ## Límites honestos
 
+- **El agente no tiene llaves de admin**: solo propone acciones y consulta las suyas; política, llaves y firma exigen otro token. Si el agente puede leer el `.env` del servidor, esa separación desaparece: ver [`docs/11-acceso.md`](docs/11-acceso.md).
 - **Preguntas frecuentes de seguridad** — los cuatro escenarios del ensayo oral, con dónde termina cada defensa: [`docs/10-seguridad-faq.md`](docs/10-seguridad-faq.md).
 - Sin `Idempotency-Key`, la API deriva una del payload + una ventana de tiempo (red de seguridad): los reintentos dentro de la ventana no duplican pagos. Un reintento **fuera** de la ventana sí crea otra acción: para control total, el agente manda su clave explícita (ver [`docs/03-api.md`](docs/03-api.md)).
 - El cuarto ojos exige **personas distintas con rol autorizado**: dos cuentas de bajo nivel comprometidas no pueden firmarse entre ellas. Pero WebAuthn prueba **posesión de la llave, no la identidad**: dos cuentas de la misma persona contarían como dos personas — en producción la identidad debe salir de un IdP, no del formulario de registro (ver la pregunta 3 de la FAQ).
@@ -72,6 +75,7 @@ El "anillo" se simula con **cualquier autenticador WebAuthn real** que ya tengas
 - [x] **Anclaje externo de la auditoría** — cabeza de la cadena publicada a archivo + webhook, con fallos auditados y alerta de silencio
 - [x] **Revocación de llaves y entornos** → [`docs/09-produccion.md`](docs/09-produccion.md), [`.env.example`](.env.example)
 - [x] **FAQ de seguridad** → [`docs/10-seguridad-faq.md`](docs/10-seguridad-faq.md) (los límites explicados, para entrevistas)
+- [x] **Fase 8 — El agente contra el guardián** → [`docs/11-acceso.md`](docs/11-acceso.md), [`src/api/access.ts`](src/api/access.ts) (tokens separados de agente y admin, tope acumulado anti-fraccionamiento)
 
 ## Stack
 
@@ -107,7 +111,7 @@ centinela/
 
 ```bash
 pnpm install
-pnpm test        # 179 pruebas: modelo, motor, API, WebAuthn, cuarto ojos con roles, auditoría, anclaje y red team
+pnpm test        # 204 pruebas: modelo, motor, API, acceso, WebAuthn, cuarto ojos con roles, auditoría, anclaje y red team
 pnpm typecheck   # TypeScript estricto
 ```
 
@@ -123,7 +127,7 @@ CENTINELA_STORE=mock pnpm dev  # demo sin base de datos (en memoria)
 - **Firma con tu llave**: abre <http://localhost:4000/firmar> (con `localhost`, no 127.0.0.1), registra tu huella/Windows Hello con un rol y aprueba o rechaza. Antes de firmar, la página exige **teclear un código de verificación de 16 caracteres hex (64 bits)** que debe coincidir con el del panel en otro dispositivo.
 - **Firma desde el móvil (dos dispositivos)**: `HOST=0.0.0.0` + túnel HTTPS + `RP_ID`/`ORIGIN` — guía en [`docs/08-canal-cruzado.md`](docs/08-canal-cruzado.md).
 - **Demo de firma sin navegador** (autenticador virtual, criptografía real): `pnpm demo:webauthn`
-- **Auditoría**: `curl http://127.0.0.1:4000/api/audit/verify` comprueba la cadena completa; `curl http://127.0.0.1:4000/api/audit/anchor` muestra el último anclaje externo y si la copia está callando.
+- **Auditoría** (con el token de admin): `curl -H "Authorization: Bearer $CENTINELA_ADMIN_TOKEN" http://127.0.0.1:4000/api/audit/verify` comprueba la cadena completa; `/api/audit/anchor` muestra el último anclaje externo y si la copia está callando.
 
 Ejemplos con curl en [`docs/03-api.md`](docs/03-api.md).
 

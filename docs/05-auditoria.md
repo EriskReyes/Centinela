@@ -54,7 +54,7 @@ La doble escritura (acción + registro) no es transaccional en MongoDB standalon
 ## Ejemplo
 
 ```bash
-curl http://127.0.0.1:4000/api/audit/verify
-curl "http://127.0.0.1:4000/api/audit?eventType=signature_failed"
-curl http://127.0.0.1:4000/api/audit/<id-de-la-accion>
+curl -H "Authorization: Bearer $CENTINELA_ADMIN_TOKEN" http://127.0.0.1:4000/api/audit/verify
+curl -H "Authorization: Bearer $CENTINELA_ADMIN_TOKEN" "http://127.0.0.1:4000/api/audit?eventType=signature_failed"
+curl -H "Authorization: Bearer $CENTINELA_ADMIN_TOKEN" http://127.0.0.1:4000/api/audit/<id-de-la-accion>
 ```

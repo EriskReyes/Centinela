@@ -14,6 +14,18 @@ export interface ActionListFilter {
   limit: number;
 }
 
+export interface AutoApprovedFilter {
+  agentId: string;
+  actionType: string;
+  currency: string;
+  since: Date;
+}
+
+/** ¿El motor la dejó pasar sin firma humana? */
+export function wasAutoApproved(action: AgentAction): boolean {
+  return action.decisions.some((d) => d.stage === 'engine' && d.decision === 'allow');
+}
+
 export interface ActionRepository {
   insert(action: AgentAction): Promise<void>;
   /** Sustituye la acción completa si existe; devuelve false si no estaba. */
@@ -22,6 +34,8 @@ export interface ActionRepository {
   findByMetadataKey(key: string): Promise<AgentAction | null>;
   list(filter: ActionListFilter): Promise<AgentAction[]>;
   listPending(): Promise<AgentAction[]>;
+  /** Suma de importes aprobados sin firma (tope acumulado del motor). */
+  sumAutoApproved(filter: AutoApprovedFilter): Promise<number>;
 }
 
 export class InMemoryActionRepository implements ActionRepository {
@@ -80,5 +94,21 @@ export class InMemoryActionRepository implements ActionRepository {
     const result = [...this.byId.values()].filter((action) => action.status === 'pending_signature');
     result.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     return result;
+  }
+
+  async sumAutoApproved(filter: AutoApprovedFilter): Promise<number> {
+    let total = 0;
+    for (const action of this.byId.values()) {
+      if (
+        action.agentId === filter.agentId &&
+        action.actionType === filter.actionType &&
+        action.currency === filter.currency &&
+        action.createdAt >= filter.since &&
+        wasAutoApproved(action)
+      ) {
+        total += action.amountMinor ?? 0;
+      }
+    }
+    return total;
   }
 }

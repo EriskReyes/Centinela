@@ -27,62 +27,66 @@ function makeAction(overrides: Partial<NewAgentActionInput> = {}): AgentAction {
   return parsed.data;
 }
 
+/** Evalúa con un gasto previo sin firma en la ventana (0 por defecto: agente "limpio"). */
+const evaluate = (action: AgentAction, policy: Policy, spentMinor = 0) =>
+  evaluateAction(action, policy, { autoApprovedInWindowMinor: spentMinor });
+
 describe('evaluateAction — motor de reglas', () => {
   it('permite un pago pequeño a un destino de confianza', () => {
-    const result = evaluateAction(makeAction({ amountMinor: 25_00, destination: 'amazon.es' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ amountMinor: 25_00, destination: 'amazon.es' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'allow');
     assert.deepEqual(result.reasons, []);
   });
 
   it('exige firma cuando el importe supera el límite de aprobación automática', () => {
-    const result = evaluateAction(makeAction({ amountMinor: 500_00, destination: 'amazon.es' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ amountMinor: 500_00, destination: 'amazon.es' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'sign');
     assert.ok(result.reasons.join(' ').includes('límite de aprobación automática'));
   });
 
   it('bloquea importes por encima del límite máximo, aunque el destino sea de confianza', () => {
-    const result = evaluateAction(makeAction({ amountMinor: 2_000_00, destination: 'amazon.es' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ amountMinor: 2_000_00, destination: 'amazon.es' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
   });
 
   it('respeta los límites exactos de la política', () => {
     const trusted = { destination: 'amazon.es' };
     // 100_00 = 100,00 EUR (límite allow): justo en el límite se permite.
-    assert.equal(evaluateAction(makeAction({ ...trusted, amountMinor: 100_00 }), DEFAULT_POLICY).decision, 'allow');
+    assert.equal(evaluate(makeAction({ ...trusted, amountMinor: 100_00 }), DEFAULT_POLICY).decision, 'allow');
     // 1_000_00 = 1.000,00 EUR (límite sign): justo en el límite se firma.
-    assert.equal(evaluateAction(makeAction({ ...trusted, amountMinor: 1_000_00 }), DEFAULT_POLICY).decision, 'sign');
+    assert.equal(evaluate(makeAction({ ...trusted, amountMinor: 1_000_00 }), DEFAULT_POLICY).decision, 'sign');
     // Un centavo por encima: se bloquea.
-    assert.equal(evaluateAction(makeAction({ ...trusted, amountMinor: 1_000_01 }), DEFAULT_POLICY).decision, 'block');
+    assert.equal(evaluate(makeAction({ ...trusted, amountMinor: 1_000_01 }), DEFAULT_POLICY).decision, 'block');
   });
 
   it('aplica límites distintos por tipo (reservation)', () => {
     const reservation = (amountMinor: number) =>
       makeAction({ actionType: 'reservation', amountMinor, destination: 'adobe.com' });
-    assert.equal(evaluateAction(reservation(50_00), DEFAULT_POLICY).decision, 'allow');
-    assert.equal(evaluateAction(reservation(400_00), DEFAULT_POLICY).decision, 'sign');
-    assert.equal(evaluateAction(reservation(600_00), DEFAULT_POLICY).decision, 'block');
+    assert.equal(evaluate(reservation(50_00), DEFAULT_POLICY).decision, 'allow');
+    assert.equal(evaluate(reservation(400_00), DEFAULT_POLICY).decision, 'sign');
+    assert.equal(evaluate(reservation(600_00), DEFAULT_POLICY).decision, 'block');
   });
 
   it('bloquea tipos deshabilitados por la política (loan)', () => {
-    const result = evaluateAction(makeAction({ actionType: 'loan', amountMinor: 100_00 }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ actionType: 'loan', amountMinor: 100_00 }), DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes('deshabilitado'));
   });
 
   it('bloquea monedas no admitidas por la política', () => {
-    const result = evaluateAction(makeAction({ currency: 'GBP' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ currency: 'GBP' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes('GBP'));
   });
 
   it('bloquea destinos prohibidos por patrón', () => {
-    const result = evaluateAction(makeAction({ destination: 'crypto:binance' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ destination: 'crypto:binance' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes('prohibido'));
   });
 
   it('exige firma para destinos que no están en la lista de confianza', () => {
-    const result = evaluateAction(makeAction({ destination: 'proveedor-nuevo.es' }), DEFAULT_POLICY);
+    const result = evaluate(makeAction({ destination: 'proveedor-nuevo.es' }), DEFAULT_POLICY);
     assert.equal(result.decision, 'sign');
     assert.ok(result.reasons.join(' ').includes('lista de confianza'));
   });
@@ -90,66 +94,66 @@ describe('evaluateAction — motor de reglas', () => {
   it('permite leer datasets públicos, frena los sensibles y bloquea los secretos', () => {
     const dataset = (destination: string) => makeAction({ actionType: 'data_access', amountMinor: undefined, destination });
 
-    assert.equal(evaluateAction(dataset('dataset:publico-ventas'), DEFAULT_POLICY).decision, 'allow');
-    assert.equal(evaluateAction(dataset('dataset:clientes-pii'), DEFAULT_POLICY).decision, 'sign');
-    assert.equal(evaluateAction(dataset('dataset:secretos-nominas'), DEFAULT_POLICY).decision, 'block');
+    assert.equal(evaluate(dataset('dataset:publico-ventas'), DEFAULT_POLICY).decision, 'allow');
+    assert.equal(evaluate(dataset('dataset:clientes-pii'), DEFAULT_POLICY).decision, 'sign');
+    assert.equal(evaluate(dataset('dataset:secretos-nominas'), DEFAULT_POLICY).decision, 'block');
   });
 
   it('bloquea importes negativos aunque la validación ya los haya rechazado (defensa en profundidad)', () => {
     const action = { ...makeAction(), amountMinor: -5 } as AgentAction;
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes('importe inválido'));
   });
 
   it('bloquea acciones monetarias forjadas sin importe (defensa en profundidad)', () => {
     const action = { ...makeAction(), amountMinor: undefined } as AgentAction;
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes('no trae importe'));
   });
 
   it('bloquea un tipo de acción que no existe (defensa en profundidad)', () => {
     const action = { ...makeAction(), actionType: 'transfer' } as unknown as AgentAction;
-    assert.equal(evaluateAction(action, DEFAULT_POLICY).decision, 'block');
+    assert.equal(evaluate(action, DEFAULT_POLICY).decision, 'block');
   });
 
   it('se niega a evaluar algo que no sea una propuesta nueva (anti-replay temprano)', () => {
     const action = makeAction({ status: 'approved' });
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     assert.equal(result.decision, 'block');
     assert.ok(result.reasons.join(' ').includes("'proposed'"));
   });
 
   it('registra con qué versión de política se decidió (trazabilidad)', () => {
     const custom: Policy = { ...DEFAULT_POLICY, version: 7 };
-    assert.equal(evaluateAction(makeAction(), custom).policyVersion, 7);
+    assert.equal(evaluate(makeAction(), custom).policyVersion, 7);
   });
 
   it('cuarto ojos: el quórum depende del umbral dentro de la banda de firma', () => {
     // 500,00 €: justo en el umbral → una firma basta.
-    const atThreshold = evaluateAction(makeAction({ amountMinor: 500_00 }), DEFAULT_POLICY);
+    const atThreshold = evaluate(makeAction({ amountMinor: 500_00 }), DEFAULT_POLICY);
     assert.equal(atThreshold.decision, 'sign');
     assert.equal(atThreshold.requiredSignatures, 1);
     // 700,00 €: por encima del umbral → dos firmas.
-    const above = evaluateAction(makeAction({ amountMinor: 700_00 }), DEFAULT_POLICY);
+    const above = evaluate(makeAction({ amountMinor: 700_00 }), DEFAULT_POLICY);
     assert.equal(above.decision, 'sign');
     assert.equal(above.requiredSignatures, 2);
   });
 
   it('cuarto ojos por roles: la política exige autorizadores en TODA firma', () => {
-    const atThreshold = evaluateAction(makeAction({ amountMinor: 500_00 }), DEFAULT_POLICY);
+    const atThreshold = evaluate(makeAction({ amountMinor: 500_00 }), DEFAULT_POLICY);
     assert.deepEqual(atThreshold.requiredRoles, ['autorizador']);
-    const above = evaluateAction(makeAction({ amountMinor: 700_00 }), DEFAULT_POLICY);
+    const above = evaluate(makeAction({ amountMinor: 700_00 }), DEFAULT_POLICY);
     assert.deepEqual(above.requiredRoles, ['autorizador']);
-    const allow = evaluateAction(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY);
+    const allow = evaluate(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY);
     assert.equal(allow.requiredRoles, undefined);
   });
 
   it('allow y block no exigen firmas', () => {
-    assert.equal(evaluateAction(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY).requiredSignatures, undefined);
+    assert.equal(evaluate(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY).requiredSignatures, undefined);
     assert.equal(
-      evaluateAction(makeAction({ destination: 'crypto:binance' }), DEFAULT_POLICY).requiredSignatures,
+      evaluate(makeAction({ destination: 'crypto:binance' }), DEFAULT_POLICY).requiredSignatures,
       undefined,
     );
   });
@@ -170,7 +174,7 @@ describe('applyEngineDecision', () => {
 
   it("convierte 'sign' en una solicitud pendiente con vencimiento y registro", () => {
     const action = makeAction({ amountMinor: 500_00 });
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     assert.equal(result.decision, 'sign');
 
     const updated = applyEngineDecision(action, result, now, () => 'r-1');
@@ -190,13 +194,13 @@ describe('applyEngineDecision', () => {
 
   it("convierte 'allow' en aprobada y 'block' en rechazada", () => {
     const allowed = makeAction();
-    const allowedResult = evaluateAction(allowed, DEFAULT_POLICY);
+    const allowedResult = evaluate(allowed, DEFAULT_POLICY);
     const updated = applyEngineDecision(allowed, allowedResult, now, () => 'r-2');
     assert.equal(updated.status, 'approved');
     assert.equal(updated.decisions[0]?.decision, 'allow');
 
     const blocked = makeAction({ destination: 'crypto:binance' });
-    const blockedResult = evaluateAction(blocked, DEFAULT_POLICY);
+    const blockedResult = evaluate(blocked, DEFAULT_POLICY);
     const updatedBlocked = applyEngineDecision(blocked, blockedResult, now, () => 'r-3');
     assert.equal(updatedBlocked.status, 'rejected');
     assert.equal(updatedBlocked.decisions[0]?.decision, 'block');
@@ -205,7 +209,7 @@ describe('applyEngineDecision', () => {
 
   it('no muta la acción original (inmutabilidad, clave para la auditoría)', () => {
     const action = makeAction();
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     applyEngineDecision(action, result, now, () => 'r-4');
     assert.equal(action.status, 'proposed');
     assert.equal(action.decisions.length, 0);
@@ -213,11 +217,36 @@ describe('applyEngineDecision', () => {
 
   it('la pendiente nace con su exigencia de firmas y cero recibidas', () => {
     const action = makeAction({ amountMinor: 700_00 });
-    const result = evaluateAction(action, DEFAULT_POLICY);
+    const result = evaluate(action, DEFAULT_POLICY);
     const updated = applyEngineDecision(action, result, now, () => 'r-5');
     assert.equal(updated.status, 'pending_signature');
     assert.equal(updated.requiredSignatures, 2);
     assert.deepEqual(updated.requiredRoles, ['autorizador']);
     assert.deepEqual(updated.signatures, []);
+  });
+});
+
+describe('evaluateAction — tope acumulado sin firma', () => {
+  // DEFAULT_POLICY: pagos de hasta 100,00 € sin firma, pero como mucho 300,00 € al día por agente.
+  it('permite mientras el acumulado + el importe no supere el tope', () => {
+    assert.equal(evaluate(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY, 275_00).decision, 'allow');
+  });
+
+  it('exige firma cuando un pago pequeño haría superar el tope', () => {
+    const result = evaluate(makeAction({ amountMinor: 25_00 }), DEFAULT_POLICY, 280_00);
+    assert.equal(result.decision, 'sign');
+    assert.equal(result.requiredSignatures, 1);
+    assert.ok(result.reasons.join(' ').includes('acumulado'));
+  });
+
+  it('sin tope acumulado en la política, el gasto previo no cuenta', () => {
+    const { cumulativeWindowMinutes: _w, cumulativeAllowLimitMinor: _l, ...payment } = DEFAULT_POLICY.types.payment;
+    const policy: Policy = { ...DEFAULT_POLICY, types: { ...DEFAULT_POLICY.types, payment } };
+    assert.equal(evaluate(makeAction({ amountMinor: 25_00 }), policy, 10_000_00).decision, 'allow');
+  });
+
+  it('no afecta a data_access (no hay importe que sumar)', () => {
+    const action = makeAction({ actionType: 'data_access', amountMinor: undefined, destination: 'dataset:publico-ventas' });
+    assert.equal(evaluate(action, DEFAULT_POLICY, 10_000_00).decision, 'allow');
   });
 });

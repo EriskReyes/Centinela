@@ -61,8 +61,27 @@ function fmt(minor, currency) {
   return major + '.' + rest + ' ' + currency;
 }
 
+// Fase 8: la página de firma usa el token de ADMIN (el agente no puede
+// registrar llaves ni firmar). Se pide una vez y vive solo en esta pestaña.
+const TOKEN_KEY = 'centinela.adminToken';
+function readToken() {
+  try { return sessionStorage.getItem(TOKEN_KEY) ?? ''; } catch { return ''; }
+}
+function askToken() {
+  const token = (prompt('Token de admin de Centinela (CENTINELA_ADMIN_TOKEN):') ?? '').trim();
+  try { sessionStorage.setItem(TOKEN_KEY, token); } catch {}
+}
+
 async function json(path, options = {}) {
-  const res = await fetch(path, options);
+  const send = (token) => fetch(path, { ...options, headers: { ...(options.headers ?? {}), authorization: 'Bearer ' + token } });
+  if (readToken() === '') askToken();
+  const sent = readToken();
+  let res = await send(sent);
+  if (res.status === 401) {
+    // Varias peticiones pueden fallar a la vez: solo la primera vuelve a preguntar.
+    if (readToken() === sent) askToken();
+    res = await send(readToken());
+  }
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 

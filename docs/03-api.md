@@ -55,21 +55,23 @@ pnpm dev                       # MongoDB local (mongodb://127.0.0.1:27017/centin
 CENTINELA_STORE=mock pnpm dev  # demo sin base de datos
 ```
 
-Variables: `PORT` (4000), `MONGO_URL`, `CENTINELA_STORE` (`mongo`|`mock`).
+Variables: `PORT` (4000), `MONGO_URL`, `CENTINELA_STORE` (`mongo`|`mock`), `CENTINELA_ADMIN_TOKEN`, `CENTINELA_AGENT_TOKENS`.
+
+Toda la API exige `Authorization: Bearer <token>`: el agente solo propone y consulta sus acciones; el resto es del admin. Ver [`docs/11-acceso.md`](11-acceso.md).
 
 ## Ejemplo con curl
 
 ```bash
 # un pago pequeño → se permite y ejecuta (201)
 curl -X POST http://127.0.0.1:4000/api/actions \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CENTINELA_AGENT_TOKEN" -H "Content-Type: application/json" \
   -d '{"agentId":"agente-compras","actionType":"payment","amountMinor":2500,"currency":"EUR","destination":"amazon.es","justification":"Compra de material de oficina aprobada en presupuesto mensual"}'
 
 # un pago grande → pendiente de tu firma (202)
 curl -X POST http://127.0.0.1:4000/api/actions \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CENTINELA_AGENT_TOKEN" -H "Content-Type: application/json" \
   -d '{"agentId":"agente-compras","actionType":"payment","amountMinor":50000,"currency":"EUR","destination":"amazon.es","justification":"Renovación anual de licencias del equipo"}'
 
 # la cola que consultará tu móvil en la Fase 4
-curl http://127.0.0.1:4000/api/actions/pending
+curl -H "Authorization: Bearer $CENTINELA_ADMIN_TOKEN" http://127.0.0.1:4000/api/actions/pending
 ```

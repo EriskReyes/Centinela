@@ -33,6 +33,7 @@ Regla de oro: **el `.env` de producción nunca se parece al de desarrollo** — 
 ## Qué NO está resuelto (honesto)
 
 - Delegación de firma con vencimiento (suplentes formales).
-- Multi-tenant y autenticación del panel (hoy el panel es de acceso local).
+- Multi-tenant e identidad federada (hoy: tokens estáticos de agente y de admin, ver [`docs/11-acceso.md`](11-acceso.md)).
+- Bloqueo compartido del tope acumulado entre varias instancias (hoy la sección crítica es por proceso).
 - Alta disponibilidad y transacciones multi-documento para la doble escritura acción+auditoría (ver [`docs/05-auditoria.md`](05-auditoria.md)).
 - Ver detalle completo en [`docs/07-ataques.md`](07-ataques.md) y [`docs/08-canal-cruzado.md`](08-canal-cruzado.md).

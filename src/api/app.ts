@@ -8,6 +8,7 @@
  *  4. guarda la acción con su rastro de decisiones completo — siempre.
  *
  * Respuestas: 201 allow · 202 sign · 403 block · 400 validación · 404 no encontrada.
+ * Acceso (Fase 8, ver access.ts): 401 sin token · 403 si el agente sale de sus rutas.
  */
 import express from 'express';
 import { randomUUID } from 'node:crypto';
@@ -19,8 +20,9 @@ import {
   type AgentAction,
   type NewAgentActionInput,
 } from '../domain/action.ts';
-import { applyEngineDecision, evaluateAction } from '../rules/engine.ts';
-import { PolicySchema } from '../rules/policy.ts';
+import { applyEngineDecision, evaluateAction, type EvaluationContext } from '../rules/engine.ts';
+import { PolicySchema, type Policy } from '../rules/policy.ts';
+import { principalOf, requireAccess, validateAccessConfig, type AccessConfig } from './access.ts';
 import { appendExecutionRecord, executeAction, type ExecutionResult } from '../execution/connector.ts';
 import { deriveIdempotencyKey } from './idempotency.ts';
 import type { ActionRepository } from './repository.ts';
@@ -32,6 +34,8 @@ import type { AuditService } from '../audit/service.ts';
 export interface AppDeps {
   repository: ActionRepository;
   policyProvider: PolicyProvider;
+  /** Fase 8: tokens del agente y del admin. Obligatorio: sin él no hay API. */
+  access: AccessConfig;
   /** Reloj inyectable: los tests lo adelantan para probar expiraciones. */
   now?: () => Date;
   idFactory?: () => string;
@@ -52,6 +56,41 @@ export function createApp(deps: AppDeps): express.Express {
   const now = deps.now ?? (() => new Date());
   const idFactory = deps.idFactory ?? randomUUID;
   const execute = deps.execute ?? executeAction;
+  validateAccessConfig(deps.access);
+
+  /** Gasto ya aprobado SIN firma por este agente dentro de la ventana de la política. */
+  async function evaluationContext(action: AgentAction, policy: Policy): Promise<EvaluationContext> {
+    const typePolicy = policy.types[action.actionType];
+    if (typePolicy?.cumulativeWindowMinutes === undefined) {
+      return { autoApprovedInWindowMinor: 0 };
+    }
+    const since = new Date(now().getTime() - typePolicy.cumulativeWindowMinutes * 60_000);
+    return {
+      autoApprovedInWindowMinor: await deps.repository.sumAutoApproved({
+        agentId: action.agentId,
+        actionType: action.actionType,
+        currency: action.currency,
+        since,
+      }),
+    };
+  }
+
+  // Cola por agente (en este proceso). Con varias instancias haría falta un
+  // bloqueo compartido (p. ej. en Mongo); ver docs/09-produccion.md.
+  const agentLocks = new Map<string, Promise<unknown>>();
+  async function withAgentLock(agentId: string, fn: () => Promise<unknown>): Promise<void> {
+    const previous = agentLocks.get(agentId) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const tail = run.catch(() => undefined);
+    agentLocks.set(agentId, tail);
+    try {
+      await run;
+    } finally {
+      if (agentLocks.get(agentId) === tail) {
+        agentLocks.delete(agentId);
+      }
+    }
+  }
 
   const app = express();
   app.disable('x-powered-by');
@@ -61,128 +100,162 @@ export function createApp(deps: AppDeps): express.Express {
     res.json({ ok: true, service: 'centinela' });
   });
 
+  // Fase 8: todo /api exige token; el agente solo llega a sus dos rutas.
+  app.use(
+    '/api',
+    requireAccess(deps.access, async (agentId, req) => {
+      await deps.audit?.append({
+        eventType: 'access_denied',
+        actionId: 'access-control',
+        actor: agentId,
+        decision: 'rejected',
+        reason: `el agente intentó ${req.method} /api${req.path}`,
+        at: now(),
+      });
+    }),
+  );
+
   app.post('/api/actions', async (req, res, next) => {
+    const principal = principalOf(res);
+    if (principal.kind !== 'agent') {
+      return res.status(403).json({ error: 'solo un agente puede proponer acciones' });
+    }
+    const raw = (req.body ?? {}) as NewAgentActionInput;
+    // El token fija la identidad: el agente no puede proponer en nombre de otro.
+    if (raw.agentId !== undefined && raw.agentId !== principal.agentId) {
+      return res.status(403).json({
+        error: `el token pertenece a '${principal.agentId}': no puede proponer como '${String(raw.agentId)}'`,
+      });
+    }
+    const body: NewAgentActionInput = { ...raw, agentId: principal.agentId };
     const headerKey = req.get('Idempotency-Key');
     const explicitKey = typeof headerKey === 'string' && headerKey.length > 0 ? headerKey : undefined;
-    const body = (req.body ?? {}) as NewAgentActionInput;
     // Clave explícita del agente, o derivada del contenido + ventana (red de seguridad).
     const idempotencyKey =
       explicitKey ?? deriveIdempotencyKey(body, now(), deps.idempotencyWindowSeconds ?? 60);
-    try {
+    const replay = (existing: AgentAction) =>
+      existing.agentId === principal.agentId
+        ? res.status(200).json({ action: existing, replayed: true, idempotencyKey })
+        : res.status(409).json({ error: 'esa clave de idempotencia ya la usó otro agente' });
+    // Un agente a la vez: leer el gasto acumulado e insertar la acción es una
+    // sección crítica (si no, N envíos en paralelo verían todos el mismo total).
+    await withAgentLock(principal.agentId, async () => {
+      try {
 
-      const existing = await deps.repository.findByMetadataKey(idempotencyKey);
-      if (existing !== null) {
-        return res.status(200).json({ action: existing, replayed: true, idempotencyKey });
-      }
+        const existing = await deps.repository.findByMetadataKey(idempotencyKey);
+        if (existing !== null) {
+          return replay(existing);
+        }
 
-      const input: NewAgentActionInput = {
-        ...body,
-        id: idFactory(),
-        status: 'proposed',
-        createdAt: now(),
-        decisions: [],
-        metadata: {
-          ...(typeof body.metadata === 'object' && body.metadata !== null ? body.metadata : {}),
-          ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
-        },
-      };
-      const parsed = AgentActionSchema.safeParse(input);
-      if (!parsed.success) {
-        return res.status(400).json({
-          error: 'validación',
-          issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
-        });
-      }
-      const proposed = parsed.data;
+        const input: NewAgentActionInput = {
+          ...body,
+          id: idFactory(),
+          status: 'proposed',
+          createdAt: now(),
+          decisions: [],
+          metadata: {
+            ...(typeof body.metadata === 'object' && body.metadata !== null ? body.metadata : {}),
+            ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+          },
+        };
+        const parsed = AgentActionSchema.safeParse(input);
+        if (!parsed.success) {
+          return res.status(400).json({
+            error: 'validación',
+            issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+          });
+        }
+        const proposed = parsed.data;
 
-      const policy = await deps.policyProvider.get();
-      const decision = evaluateAction(proposed, policy);
-      const decided = applyEngineDecision(proposed, decision, now(), idFactory);
-      const audit = deps.audit;
+        const policy = await deps.policyProvider.get();
+        const decision = evaluateAction(proposed, policy, await evaluationContext(proposed, policy));
+        const decided = applyEngineDecision(proposed, decision, now(), idFactory);
+        const audit = deps.audit;
 
-      if (decision.decision === 'allow') {
-        const execution = execute(decided, now());
-        const executed = appendExecutionRecord(decided, execution, now(), idFactory);
-        await deps.repository.insert(executed);
+        if (decision.decision === 'allow') {
+          const execution = execute(decided, now());
+          const executed = appendExecutionRecord(decided, execution, now(), idFactory);
+          await deps.repository.insert(executed);
+          if (audit !== undefined) {
+            const at = now();
+            await audit.append({
+              eventType: 'action_proposed',
+              actionId: executed.id,
+              actor: executed.agentId,
+              statusBefore: 'proposed',
+              statusAfter: 'proposed',
+              at,
+            });
+            await audit.append({
+              eventType: 'engine_decision',
+              actionId: executed.id,
+              actor: 'rules-engine',
+              decision: decision.decision,
+              statusBefore: 'proposed',
+              statusAfter: executed.status,
+              reason: decision.reasons.join(' | ') || undefined,
+              policyVersion: decision.policyVersion,
+              at,
+            });
+            await audit.append({
+              eventType: 'action_executed',
+              actionId: executed.id,
+              actor: execution.connector,
+              decision: execution.ok ? 'approved' : 'rejected',
+              statusBefore: decided.status,
+              statusAfter: executed.status,
+              reason: execution.detail,
+              at,
+            });
+          }
+          return res.status(201).json({ action: executed, decision: 'allow', execution, idempotencyKey });
+        }
+
+        await deps.repository.insert(decided);
         if (audit !== undefined) {
           const at = now();
           await audit.append({
             eventType: 'action_proposed',
-            actionId: executed.id,
-            actor: executed.agentId,
+            actionId: decided.id,
+            actor: decided.agentId,
             statusBefore: 'proposed',
             statusAfter: 'proposed',
             at,
           });
           await audit.append({
             eventType: 'engine_decision',
-            actionId: executed.id,
+            actionId: decided.id,
             actor: 'rules-engine',
             decision: decision.decision,
             statusBefore: 'proposed',
-            statusAfter: executed.status,
+            statusAfter: decided.status,
             reason: decision.reasons.join(' | ') || undefined,
             policyVersion: decision.policyVersion,
             at,
           });
-          await audit.append({
-            eventType: 'action_executed',
-            actionId: executed.id,
-            actor: execution.connector,
-            decision: execution.ok ? 'approved' : 'rejected',
-            statusBefore: decided.status,
-            statusAfter: executed.status,
-            reason: execution.detail,
-            at,
+        }
+        if (decision.decision === 'sign') {
+          return res.status(202).json({
+            action: decided,
+            decision: 'sign',
+            reasons: decision.reasons,
+            expiresAt: decided.expiresAt,
+            idempotencyKey,
           });
         }
-        return res.status(201).json({ action: executed, decision: 'allow', execution, idempotencyKey });
-      }
-
-      await deps.repository.insert(decided);
-      if (audit !== undefined) {
-        const at = now();
-        await audit.append({
-          eventType: 'action_proposed',
-          actionId: decided.id,
-          actor: decided.agentId,
-          statusBefore: 'proposed',
-          statusAfter: 'proposed',
-          at,
-        });
-        await audit.append({
-          eventType: 'engine_decision',
-          actionId: decided.id,
-          actor: 'rules-engine',
-          decision: decision.decision,
-          statusBefore: 'proposed',
-          statusAfter: decided.status,
-          reason: decision.reasons.join(' | ') || undefined,
-          policyVersion: decision.policyVersion,
-          at,
-        });
-      }
-      if (decision.decision === 'sign') {
-        return res.status(202).json({
-          action: decided,
-          decision: 'sign',
-          reasons: decision.reasons,
-          expiresAt: decided.expiresAt,
-          idempotencyKey,
-        });
-      }
-      return res.status(403).json({ action: decided, decision: 'block', reasons: decision.reasons, idempotencyKey });
-    } catch (err) {
-      // Carrera entre dos envíos paralelos con la misma clave: el índice único
-      // ha rechazado el segundo; devolvemos la acción que ganó la carrera.
-      if ((err as { code?: number }).code === 11000) {
-        const existing = await deps.repository.findByMetadataKey(idempotencyKey);
-        if (existing !== null) {
-          return res.status(200).json({ action: existing, replayed: true, idempotencyKey });
+        return res.status(403).json({ action: decided, decision: 'block', reasons: decision.reasons, idempotencyKey });
+      } catch (err) {
+        // Carrera entre dos envíos paralelos con la misma clave: el índice único
+        // ha rechazado el segundo; devolvemos la acción que ganó la carrera.
+        if ((err as { code?: number }).code === 11000) {
+          const existing = await deps.repository.findByMetadataKey(idempotencyKey);
+          if (existing !== null) {
+            return replay(existing);
+          }
         }
+        next(err);
       }
-      next(err);
-    }
+    });
   });
 
   app.get('/api/actions/pending', async (_req, res, next) => {
@@ -220,7 +293,9 @@ export function createApp(deps: AppDeps): express.Express {
   app.get('/api/actions/:id', async (req, res, next) => {
     try {
       const action = await deps.repository.findById(req.params.id);
-      if (action === null) {
+      const principal = principalOf(res);
+      // Un agente solo ve las suyas; las ajenas "no existen" (no se filtra ni su id).
+      if (action === null || (principal.kind === 'agent' && action.agentId !== principal.agentId)) {
         return res.status(404).json({ error: 'acción no encontrada' });
       }
       res.json({ action });

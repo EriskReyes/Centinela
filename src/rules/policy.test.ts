@@ -100,3 +100,19 @@ describe('PolicySchema', () => {
     }
   });
 });
+
+describe('PolicySchema — tope acumulado', () => {
+  it('rechaza un tope acumulado sin ventana (y una ventana sin tope)', () => {
+    const { cumulativeWindowMinutes: _w, ...sinVentana } = DEFAULT_POLICY.types.payment;
+    const { cumulativeAllowLimitMinor: _l, ...sinTope } = DEFAULT_POLICY.types.payment;
+    for (const payment of [sinVentana, sinTope]) {
+      const parsed = PolicySchema.safeParse({ ...DEFAULT_POLICY, types: { ...DEFAULT_POLICY.types, payment } });
+      assert.equal(parsed.success, false);
+    }
+  });
+
+  it('acepta un tipo sin tope acumulado', () => {
+    const { cumulativeWindowMinutes: _w, cumulativeAllowLimitMinor: _l, ...payment } = DEFAULT_POLICY.types.payment;
+    assert.equal(PolicySchema.safeParse({ ...DEFAULT_POLICY, types: { ...DEFAULT_POLICY.types, payment } }).success, true);
+  });
+});

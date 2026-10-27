@@ -3,18 +3,25 @@
  * Uso: arranca el servidor (pnpm dev) y ejecuta `node scripts/smoke.mjs`.
  */
 const BASE = process.env.CENTINELA_URL ?? 'http://127.0.0.1:4000';
+// Fase 8: el agente propone con SU token; la cola y la política son del admin.
+const AGENT_TOKEN = process.env.CENTINELA_AGENT_TOKEN;
+const ADMIN_TOKEN = process.env.CENTINELA_ADMIN_TOKEN;
+if (AGENT_TOKEN === undefined || ADMIN_TOKEN === undefined) {
+  console.error('Define CENTINELA_AGENT_TOKEN y CENTINELA_ADMIN_TOKEN (los imprime el servidor al arrancar).');
+  process.exit(1);
+}
 
 async function post(body, headers = {}) {
   const res = await fetch(`${BASE}/api/actions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_TOKEN}`, ...headers },
     body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 }
 
 async function get(path) {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
   return { status: res.status, body: await res.json() };
 }
 

@@ -10,11 +10,19 @@ import { FakeAuthenticator } from '../src/auth/testkit.ts';
 
 const BASE = process.env.CENTINELA_URL ?? 'http://localhost:4000';
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:4000';
+// Fase 8: el agente propone con SU token; registrar y firmar es cosa del admin.
+const AGENT_TOKEN = process.env.CENTINELA_AGENT_TOKEN;
+const ADMIN_TOKEN = process.env.CENTINELA_ADMIN_TOKEN;
+if (AGENT_TOKEN === undefined || ADMIN_TOKEN === undefined) {
+  console.error('Define CENTINELA_AGENT_TOKEN y CENTINELA_ADMIN_TOKEN (los imprime el servidor al arrancar).');
+  process.exit(1);
+}
 
 async function post(path: string, body: unknown): Promise<{ status: number; body: any }> {
+  const token = path === '/api/actions' ? AGENT_TOKEN : ADMIN_TOKEN;
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
@@ -27,6 +35,8 @@ const authenticator = new FakeAuthenticator('localhost', ORIGIN);
 const regOptions = await post('/api/webauthn/register/options', { userId: 'maria', userName: 'María (gerente)' });
 const registered = await post('/api/webauthn/register/verify', {
   userId: 'maria',
+  // La política exige rol autorizador para firmar pagos (sin rol → 'empleado' → 403).
+  role: 'autorizador',
   response: authenticator.register(regOptions.body.options),
 });
 console.log(`1 · Llave registrada (${registered.status}): ${registered.body.credentialId?.slice(0, 12)}…`);
