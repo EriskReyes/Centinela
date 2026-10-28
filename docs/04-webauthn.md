@@ -41,14 +41,16 @@ sequenceDiagram
 
 ## Decisiones de seguridad
 
-1. **El reto es el contenido**: `SHA-256(actionId, tipo, importe, moneda, destino, justificación, decisión)` en base64url. No se firma un número aleatorio: se firma *lo que se está aprobando*. Firmar otra cosa es imposible.
+1. **El reto es el contenido**: `SHA-256(actionId, tipo, importe, moneda, destino, operación, contentHash, justificación, decisión, firmas previas)` en base64url. No se firma un número aleatorio: se firma *lo que se está aprobando*. Aun así el reto es impredecible, porque `actionId` es un UUID aleatorio que genera el servidor. Si otra persona firma entre el reto y la respuesta, el reto ya no coincide y la firma se rechaza con 409.
 2. **Retos de un solo uso**: al verificarlos se borran; una firma no se puede reutilizar aunque sea criptográficamente válida. TTL de 5 minutos.
 3. **Contador anti-replay por credencial**: cada firma actualiza el contador del autenticador en MongoDB; un uso con contador antiguo no verifica (defensa estándar contra clones de llave).
 4. **`userVerification: required`**: la firma exige huella, PIN o patrón — el "toque humano" del anillo.
 5. **`attestation: none`**: para la demo vale cualquier autenticador; en producción se usaría `direct` con MDS para restringir a dispositivos aprobados.
 6. **Una firma fallida también consume el reto**: no se puede probar indefinidamente contra un mismo reto; el cliente pide opciones nuevas.
 7. **La decisión humana solo existe en la máquina de estados**: `pending_signature → approved | rejected`, aplicada por `applyHumanDecision` con el id de la llave en el `DecisionRecord`.
-8. **RP ID = `localhost`**: la página debe abrirse con `http://localhost:4000` (no 127.0.0.1). En producción sería el dominio real de la empresa.
+8. **Lo firmado se ejecuta**: cuando la firma completa el quórum, el conector corre en ese momento y la respuesta incluye `execution`. Dos firmas simultáneas no se pisan: la escritura es condicional y la segunda recibe 409.
+9. **Registrar y firmar son rutas de admin**: exigen `CENTINELA_ADMIN_TOKEN` (la página `/firmar` lo pide). Un agente no puede registrar una llave ni firmar. Ver [`docs/11-acceso.md`](11-acceso.md).
+10. **RP ID = `localhost`**: la página debe abrirse con `http://localhost:4000` (no 127.0.0.1). En producción sería el dominio real de la empresa.
 
 ## Probar
 

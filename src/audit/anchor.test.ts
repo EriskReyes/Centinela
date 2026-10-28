@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { InMemoryAuditRepository } from './repository.ts';
 import { createAuditService } from './service.ts';
@@ -27,7 +26,9 @@ const event = () =>
 
 describe('anclaje externo de la auditoría', () => {
   it('publica la cabeza cada N entradas al archivo y al webhook', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'centinela-anchor-'));
+    // Carpeta temporal DENTRO del workspace: %TEMP% puede estar restringido
+    // en algunos entornos (sandboxes), y el diario de anclas es solo de prueba.
+    const dir = await mkdtemp(path.join(process.cwd(), '.tmp-anchor-'));
     const filePath = path.join(dir, 'anchors.log');
     const received: AnchorRecord[] = [];
     const server = createServer((req, res) => {
@@ -221,5 +222,23 @@ describe('anclaje externo de la auditoría', () => {
     assert.equal(after.head?.seq, 1);
     assert.equal(after.lastAnchor, null);
     void readLastJournalEntry;
+  });
+});
+
+describe('webhook de anclaje colgado', () => {
+  it('no espera para siempre: falla al vencer el plazo', async () => {
+    // Servidor que acepta la conexión y nunca responde.
+    const server = createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/anchor`;
+    try {
+      const sink = createWebhookAnchorSink(url, 100);
+      const started = Date.now();
+      await assert.rejects(sink({ seq: 1, hash: 'h', count: 1, at: new Date().toISOString() } as unknown as AnchorRecord));
+      assert.ok(Date.now() - started < 2_000);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

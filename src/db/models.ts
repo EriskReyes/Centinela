@@ -30,9 +30,11 @@ export interface ActionDoc {
   agentId: string;
   actionType: ActionType;
   amountMinor?: number;
-  currency: string;
+  currency?: string;
   destination: string;
   justification: string;
+  operation?: string;
+  contentHash?: string;
   metadata?: Record<string, unknown>;
   status: ActionStatus;
   createdAt: Date;
@@ -48,10 +50,12 @@ const actionSchema = new mongoose.Schema<ActionDoc>(
   {
     _id: { type: String },
     agentId: { type: String, required: true, index: true },
-    actionType: { type: String, required: true, enum: ['payment', 'reservation', 'loan', 'data_access'] },
+    actionType: { type: String, required: true, enum: ['payment', 'reservation', 'loan', 'data_access', 'file_change', 'program_change'] },
     amountMinor: { type: Number },
-    currency: { type: String, required: true },
+    currency: { type: String },
     destination: { type: String, required: true },
+    operation: { type: String },
+    contentHash: { type: String },
     justification: { type: String, required: true },
     metadata: { type: mongoose.Schema.Types.Mixed },
     status: {

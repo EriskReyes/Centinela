@@ -34,6 +34,8 @@ describe('el reto de firma', () => {
       'amountMinor',
       'currency',
       'destination',
+      'operation',
+      'contentHash',
       'justification',
       'decision',
       'priorSignatures',
@@ -95,6 +97,34 @@ describe('la huella de verificación entre canales', () => {
     assert.notEqual(
       challengeFingerprint(original),
       challengeFingerprint(afterFirst),
+    );
+  });
+
+  it('cambia si cambia la operación (archivos y programa)', () => {
+    const fileChange = {
+      ...action,
+      actionType: 'file_change' as const,
+      amountMinor: undefined,
+      operation: 'modify',
+      contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+    };
+    assert.notEqual(
+      challengeForAction(fileChange, 'approve'),
+      challengeForAction({ ...fileChange, operation: 'delete' }, 'approve'),
+    );
+  });
+
+  it('cambia si cambia el contenido: firmar un archivo no autoriza otro contenido', () => {
+    const fileChange = {
+      ...action,
+      actionType: 'file_change' as const,
+      amountMinor: undefined,
+      operation: 'modify',
+      contentHash: 'ab'.repeat(32),
+    };
+    assert.notEqual(
+      challengeForAction(fileChange, 'approve'),
+      challengeForAction({ ...fileChange, contentHash: 'cd'.repeat(32) }, 'approve'),
     );
   });
 });

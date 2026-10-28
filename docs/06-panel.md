@@ -50,4 +50,12 @@ node scripts/smoke.mjs          # genera actividad desde un agente
 | Método | Ruta | Qué hace |
 |---|---|---|
 | `PUT` | `/api/policy` | guarda una política nueva (validada) y devuelve la versión creada |
-| `GET` | `/api/stats` | resumen del libro: acciones por estado/tipo + integridad de la auditoría |
+| `GET` | `/api/stats` | resumen del libro: acciones por estado/tipo (la integridad va en `/api/audit/verify`, que no se recorre en cada carga) |
+
+## Acceso, guardado y modo estricto
+
+- El panel pide el **token de admin** (`CENTINELA_ADMIN_TOKEN`) al abrirse y lo guarda solo en `sessionStorage` (se olvida al cerrar la pestaña). Con un token de agente, todo responde 403. Ver [`docs/11-acceso.md`](11-acceso.md).
+- Guardar la política **conserva los campos que el panel no edita** (quórum, tope acumulado, `signOperations`).
+- **Modo estricto**: pide confirmación, pone a cero los límites automáticos, vacía la lista de confianza y exige firma para todo destino fuera de ella. Desde ese momento ninguna acción se ejecuta sin una persona.
+- La cola muestra la `operation` y la huella `sha256` del contenido de los cambios de archivos y programa, para compararla con `/firmar`.
+- `/panel` y `/firmar` se sirven con CSP (`script-src` con nonce por petición, `frame-ancestors 'none'`): un texto del agente no puede ejecutar código en la pantalla de firma.

@@ -23,8 +23,10 @@ import {
 import { applyEngineDecision, evaluateAction, type EvaluationContext } from '../rules/engine.ts';
 import { PolicySchema, type Policy } from '../rules/policy.ts';
 import { principalOf, requireAccess, validateAccessConfig, type AccessConfig } from './access.ts';
-import { appendExecutionRecord, executeAction, type ExecutionResult } from '../execution/connector.ts';
+import type { ExecutionResult } from '../execution/connector.ts';
+import { executeApproved, type ExecutorDeps } from '../execution/executor.ts';
 import { deriveIdempotencyKey } from './idempotency.ts';
+import { normalizePath } from '../domain/paths.ts';
 import type { ActionRepository } from './repository.ts';
 import type { PolicyProvider } from './policyProvider.ts';
 import { createAuthRouter, type AuthRouterDeps } from '../auth/routes.ts';
@@ -55,7 +57,7 @@ const MAX_LIST = 200;
 export function createApp(deps: AppDeps): express.Express {
   const now = deps.now ?? (() => new Date());
   const idFactory = deps.idFactory ?? randomUUID;
-  const execute = deps.execute ?? executeAction;
+  const executorDeps: ExecutorDeps = { repository: deps.repository, execute: deps.execute, audit: deps.audit, now, idFactory };
   validateAccessConfig(deps.access);
 
   /** Gasto ya aprobado SIN firma por este agente dentro de la ventana de la política. */
@@ -69,7 +71,7 @@ export function createApp(deps: AppDeps): express.Express {
       autoApprovedInWindowMinor: await deps.repository.sumAutoApproved({
         agentId: action.agentId,
         actionType: action.actionType,
-        currency: action.currency,
+        currency: action.currency ?? '',
         since,
       }),
     };
@@ -128,6 +130,10 @@ export function createApp(deps: AppDeps): express.Express {
       });
     }
     const body: NewAgentActionInput = { ...raw, agentId: principal.agentId };
+    // Rutas en forma canónica: lo que se evalúa, se firma y se ejecuta es lo mismo.
+    if ((raw.actionType === 'file_change' || raw.actionType === 'program_change') && typeof raw.destination === 'string') {
+      body.destination = normalizePath(raw.destination);
+    }
     const headerKey = req.get('Idempotency-Key');
     const explicitKey = typeof headerKey === 'string' && headerKey.length > 0 ? headerKey : undefined;
     // Clave explícita del agente, o derivada del contenido + ventana (red de seguridad).
@@ -173,41 +179,31 @@ export function createApp(deps: AppDeps): express.Express {
         const audit = deps.audit;
 
         if (decision.decision === 'allow') {
-          const execution = execute(decided, now());
-          const executed = appendExecutionRecord(decided, execution, now(), idFactory);
-          await deps.repository.insert(executed);
+          // Primero se guarda (y se audita) la aprobación; DESPUÉS se ejecuta.
+          await deps.repository.insert(decided);
           if (audit !== undefined) {
             const at = now();
             await audit.append({
               eventType: 'action_proposed',
-              actionId: executed.id,
-              actor: executed.agentId,
+              actionId: decided.id,
+              actor: decided.agentId,
               statusBefore: 'proposed',
               statusAfter: 'proposed',
               at,
             });
             await audit.append({
               eventType: 'engine_decision',
-              actionId: executed.id,
+              actionId: decided.id,
               actor: 'rules-engine',
               decision: decision.decision,
               statusBefore: 'proposed',
-              statusAfter: executed.status,
+              statusAfter: decided.status,
               reason: decision.reasons.join(' | ') || undefined,
               policyVersion: decision.policyVersion,
               at,
             });
-            await audit.append({
-              eventType: 'action_executed',
-              actionId: executed.id,
-              actor: execution.connector,
-              decision: execution.ok ? 'approved' : 'rejected',
-              statusBefore: decided.status,
-              statusAfter: executed.status,
-              reason: execution.detail,
-              at,
-            });
           }
+          const { action: executed, execution } = await executeApproved(decided, executorDeps);
           return res.status(201).json({ action: executed, decision: 'allow', execution, idempotencyKey });
         }
 
@@ -266,7 +262,7 @@ export function createApp(deps: AppDeps): express.Express {
       for (const action of pending) {
         const updated = expirePendingAction(action, current, idFactory);
         if (updated !== action) {
-          await deps.repository.replace(updated);
+          await deps.repository.replace(updated, { status: 'pending_signature' });
           if (deps.audit !== undefined) {
             await deps.audit.append({
               eventType: 'action_expired',
@@ -372,19 +368,17 @@ export function createApp(deps: AppDeps): express.Express {
         byStatus[action.status] = (byStatus[action.status] ?? 0) + 1;
         byType[action.actionType] = (byType[action.actionType] ?? 0) + 1;
       }
-      let audit: { total: number; ok: boolean } | undefined;
-      if (deps.audit !== undefined) {
-        const verification = await deps.audit.verify();
-        audit = { total: verification.total, ok: verification.ok };
-      }
-      res.json({ actions: { total: actions.length, byStatus, byType }, audit });
+      // La integridad de la cadena va aparte (/api/audit/verify): recorrerla
+      // entera en cada carga del resumen no escala con el tamaño del registro.
+      res.json({ actions: { total: actions.length, byStatus, byType } });
     } catch (err) {
       next(err);
     }
   });
 
   if (deps.auth !== undefined) {
-    app.use('/api', createAuthRouter(deps.auth));
+    // Lo que firman los humanos también se ejecuta, con el mismo conector.
+    app.use('/api', createAuthRouter({ execute: deps.execute, ...deps.auth }));
   }
 
   if (deps.audit !== undefined) {

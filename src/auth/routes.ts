@@ -17,6 +17,8 @@ import { challengeFingerprint, challengeForAction, type HumanDecision } from './
 import type { ChallengeRepository, CredentialRepository } from './repos.ts';
 import type { ActionRepository } from '../api/repository.ts';
 import type { AuditService } from '../audit/service.ts';
+import type { ExecutionResult } from '../execution/connector.ts';
+import { executeApproved } from '../execution/executor.ts';
 
 export interface AuthRouterDeps {
   repository: ActionRepository;
@@ -27,6 +29,8 @@ export interface AuthRouterDeps {
   idFactory?: () => string;
   /** Fase 5: registro de auditoría (firmas, fallos y expiraciones). */
   audit?: AuditService;
+  /** Conector para ejecutar lo aprobado por firma (por defecto, el simulado). */
+  execute?: (action: AgentAction, now: Date) => ExecutionResult;
 }
 
 /** Usuario de la demo: en producción vendría de la sesión autenticada. */
@@ -183,9 +187,13 @@ export function createAuthRouter(deps: AuthRouterDeps): express.Router {
         now(),
         idFactory,
       );
-      const replaced = await deps.repository.replace(updated);
+      // Solo si nadie la cambió desde que se leyó: dos firmas simultáneas no se pisan.
+      const replaced = await deps.repository.replace(updated, {
+        status: 'pending_signature',
+        signatureCount: action.signatures?.length ?? 0,
+      });
       if (!replaced) {
-        throw new AuthError('la acción cambió mientras firmabas: vuelve a cargar la cola', 409);
+        throw new AuthError('la acción cambió mientras firmabas: vuelve a cargar la cola y firma de nuevo', 409);
       }
       if (deps.audit !== undefined) {
         await deps.audit.append({
@@ -201,6 +209,17 @@ export function createAuthRouter(deps: AuthRouterDeps): express.Router {
               : `firma verificada de ${verifiedUserId} (${(updated.signatures?.length ?? 0) + (decision === 'reject' ? 0 : 0)} de ${updated.requiredSignatures ?? 1} necesarias)`,
           at: now(),
         });
+      }
+      // Quórum alcanzado: lo firmado se ejecuta (antes se quedaba aprobado sin hacerse).
+      if (updated.status === 'approved') {
+        const { action: executed, execution } = await executeApproved(updated, {
+          repository: deps.repository,
+          execute: deps.execute,
+          audit: deps.audit,
+          now,
+          idFactory,
+        });
+        return res.json({ action: executed, decision: executed.status, execution });
       }
       res.json({ action: updated, decision: updated.status });
     } catch (err) {
@@ -225,7 +244,7 @@ async function loadPendingAction(
   }
   if (action.status === 'pending_signature' && action.expiresAt !== undefined && now >= action.expiresAt) {
     const expired = expirePendingAction(action, now, idFactory);
-    await repository.replace(expired);
+    await repository.replace(expired, { status: 'pending_signature' });
     if (audit !== undefined) {
       await audit.append({
         eventType: 'action_expired',

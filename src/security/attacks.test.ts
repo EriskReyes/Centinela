@@ -689,3 +689,66 @@ describe('Fase 8 — fraccionamiento: muchos pagos pequeños no suman uno grande
     });
   });
 });
+
+describe('Fase 9 — archivos y programa', () => {
+  it('un agente no puede tocar .env ni desplegar en producción (403)', async () => {
+    await withHarness(async (h) => {
+      const env = await h.post('/api/actions', {
+        agentId: 'agente-compras',
+        actionType: 'file_change',
+        destination: '.env.produccion',
+        operation: 'modify',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Ajustar variables del servidor',
+      });
+      assert.equal(env.status, 403);
+
+      const prod = await h.post('/api/actions', {
+        agentId: 'agente-compras',
+        actionType: 'program_change',
+        destination: 'deploy:produccion',
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Publicar la versión definitiva',
+      });
+      assert.equal(prod.status, 403);
+    });
+  });
+
+  it('un cambio de programa no se aprueba con una sola firma (quórum de dos autorizadores)', async () => {
+    await withHarness(async (h) => {
+      const registerKeyFor = async (userId: string, role: string): Promise<FakeAuthenticator> => {
+        const authenticator = new FakeAuthenticator(RP.rpID, RP.origin);
+        const options = await h.post('/api/webauthn/register/options', { userId });
+        const verified = await h.post('/api/webauthn/register/verify', {
+          userId,
+          role,
+          response: authenticator.register(options.body.options),
+        });
+        assert.equal(verified.status, 201);
+        return authenticator;
+      };
+      const maria = await registerKeyFor('maria', 'autorizador');
+      const proposed = await h.post('/api/actions', {
+        agentId: 'agente-compras',
+        actionType: 'program_change',
+        destination: 'deploy:staging',
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Desplegar la versión nueva en staging',
+      });
+      assert.equal(proposed.status, 202);
+      const actionId = proposed.body.action.id as string;
+
+      const options = await h.post(`/api/actions/${actionId}/sign/options`, { decision: 'approve', userId: 'maria' });
+      const signed = await h.post(`/api/actions/${actionId}/sign/verify`, {
+        decision: 'approve',
+        userId: 'maria',
+        response: maria.assert(options.body.options),
+      });
+      assert.equal(signed.status, 200);
+      assert.equal(signed.body.action.status, 'pending_signature'); // 1 de 2: nada se despliega aún
+      assert.equal(signed.body.action.signatures.length, 1);
+    });
+  });
+});

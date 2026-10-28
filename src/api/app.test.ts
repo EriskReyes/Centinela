@@ -333,3 +333,97 @@ describe('Fase 6: política editable y estadísticas', () => {
     });
   });
 });
+
+describe('tipos no monetarios: archivos y programa', () => {
+  it('un cambio de archivo en una ruta de confianza se permite y ejecuta', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'file_change',
+        destination: 'repo:centinela/docs/guia.md',
+        operation: 'modify',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Actualizar la guía con los límites nuevos del panel',
+      });
+      assert.equal(res.status, 201);
+      const body = (await res.json()) as { action: AgentAction; execution: { connector: string } };
+      assert.equal(body.action.status, 'approved');
+      assert.equal(body.execution.connector, 'simulador-archivos');
+    });
+  });
+
+  it('un cambio de archivo en una ruta sensible se bloquea (403)', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'file_change',
+        destination: '.env.produccion',
+        operation: 'modify',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Ajustar una variable de entorno del servidor',
+      });
+      assert.equal(res.status, 403);
+    });
+  });
+
+  it('un cambio de archivo en una ruta nueva queda pendiente de firma', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'file_change',
+        destination: 'repo:centinela/src/nuevo-modulo.ts',
+        operation: 'create',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Añadir el módulo nuevo del informe mensual',
+      });
+      assert.equal(res.status, 202);
+      const body = (await res.json()) as { action: AgentAction };
+      assert.equal(body.action.status, 'pending_signature');
+      assert.equal(body.action.requiredSignatures, 1);
+    });
+  });
+
+  it('un cambio de programa exige SIEMPRE dos autorizadores', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'program_change',
+        destination: 'deploy:staging',
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Desplegar la versión nueva en staging',
+      });
+      assert.equal(res.status, 202);
+      const body = (await res.json()) as { action: AgentAction };
+      assert.equal(body.action.status, 'pending_signature');
+      assert.equal(body.action.requiredSignatures, 2);
+      assert.deepEqual(body.action.requiredRoles, ['autorizador']);
+    });
+  });
+
+  it('desplegar en producción está prohibido (403)', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'program_change',
+        destination: 'deploy:produccion',
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        justification: 'Publicar la versión definitiva',
+      });
+      assert.equal(res.status, 403);
+    });
+  });
+
+  it('un cambio de archivo sin operación no pasa la validación (400)', async () => {
+    await withHarness(async (h) => {
+      const res = await h.post({
+        agentId: 'agente-compras',
+        actionType: 'file_change',
+        destination: 'repo:centinela/docs/x.md',
+        justification: 'Cambiar el documento de ayuda',
+      });
+      assert.equal(res.status, 400);
+    });
+  });
+});

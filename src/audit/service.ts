@@ -78,8 +78,21 @@ export function createAuditService(deps: {
   const now = deps.now ?? (() => new Date());
   const stalenessMinutes = deps.anchorStalenessMinutes ?? 60;
 
+  // Leer "la última entrada" e insertar la siguiente es una sección crítica:
+  // dos escrituras a la vez enlazarían con el MISMO eslabón y la cadena se
+  // vería manipulada sin que nadie la tocara. Cola en este proceso (con varias
+  // instancias haría falta un escritor único; ver docs/09-produccion.md).
+  let queue: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.then(fn, fn);
+    queue = run.catch(() => undefined);
+    return run;
+  };
+
   /** Escribe una entrada (secuencia + hashes + inserción) SIN anclar: evita recursión. */
-  const writeEntry = async (event: AuditEvent): Promise<AuditEntry> => {
+  const writeEntry = (event: AuditEvent): Promise<AuditEntry> => serialized(() => writeUnlocked(event));
+
+  const writeUnlocked = async (event: AuditEvent): Promise<AuditEntry> => {
     const seq = await deps.repository.nextSeq();
     const previous = await deps.repository.latest();
     const prevHash = previous === null ? GENESIS_HASH : linkHash(previous.contentHash, previous.prevHash);
@@ -164,10 +177,10 @@ export function createAuditService(deps: {
     },
 
     async anchorState(): Promise<AnchorState> {
-      const entries = await deps.repository.allSorted();
-      const last = entries[entries.length - 1];
+      // Solo hace falta la cabeza de la cadena, no la cadena entera.
+      const last = await deps.repository.latest();
       const head =
-        last === undefined
+        last === null
           ? null
           : { seq: last.seq, hash: linkHash(last.contentHash, last.prevHash), count: last.seq };
       const lastAnchor = await readLastAnchor();

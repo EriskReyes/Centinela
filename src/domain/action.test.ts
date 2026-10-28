@@ -280,3 +280,64 @@ describe('applyHumanDecision', () => {
     assert.equal(result.signatures?.[1]?.role, 'autorizador');
   });
 });
+
+describe('tipos no monetarios (validación)', () => {
+  it('los tipos monetarios exigen moneda', () => {
+    const { currency: _c, ...rest } = baseInput;
+    const parsed = AgentActionSchema.safeParse(rest);
+    assert.equal(parsed.success, false);
+    if (!parsed.success) {
+      assert.ok(parsed.error.issues.some((i) => i.path.includes('currency')));
+    }
+  });
+
+  it('file_change exige operation pero no importe ni moneda', () => {
+    const valid = AgentActionSchema.safeParse({
+      ...baseInput,
+      actionType: 'file_change',
+      amountMinor: undefined,
+      currency: undefined,
+      operation: 'modify',
+      contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+    });
+    assert.equal(valid.success, true);
+
+    const sinOperacion = AgentActionSchema.safeParse({
+      ...baseInput,
+      actionType: 'file_change',
+      amountMinor: undefined,
+      currency: undefined,
+    });
+    assert.equal(sinOperacion.success, false);
+  });
+
+  it('program_change también exige operation', () => {
+    const parsed = AgentActionSchema.safeParse({
+      ...baseInput,
+      actionType: 'program_change',
+      amountMinor: undefined,
+      currency: undefined,
+    });
+    assert.equal(parsed.success, false);
+  });
+
+  const fileChange = (over: Record<string, unknown>) =>
+    AgentActionSchema.safeParse({ ...baseInput, actionType: 'file_change', amountMinor: undefined, currency: undefined, ...over });
+
+  it('solo acepta las operaciones de su tipo', () => {
+    assert.equal(fileChange({ operation: 'borrar' }).success, false);
+    assert.equal(fileChange({ operation: 'deploy', contentHash: 'ab'.repeat(32) }).success, false);
+    assert.equal(fileChange({ operation: 'delete' }).success, true);
+  });
+
+  it('crear o modificar exige el hash del contenido; borrar no', () => {
+    const sinHash = fileChange({ operation: 'create' });
+    assert.equal(sinHash.success, false);
+    if (!sinHash.success) {
+      assert.ok(sinHash.error.issues.some((i) => i.path.includes('contentHash')));
+    }
+    assert.equal(fileChange({ operation: 'modify', contentHash: 'no-es-un-hash' }).success, false);
+    assert.equal(fileChange({ operation: 'modify', contentHash: 'AB'.repeat(32) }).success, false);
+    assert.equal(fileChange({ operation: 'modify', contentHash: 'ab'.repeat(32) }).success, true);
+  });
+});

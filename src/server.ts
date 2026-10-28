@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import { createApp } from './api/app.ts';
+import { sendPage } from './web/pages.ts';
 import { generateToken, parseAgentTokens, validateAccessConfig, type AccessConfig } from './api/access.ts';
 import { MongoActionRepository } from './api/mongoRepository.ts';
 import { InMemoryPolicyProvider, MongoPolicyProvider, type PolicyProvider } from './api/policyProvider.ts';
@@ -124,16 +125,17 @@ const app = createApp({
   idempotencyWindowSeconds: Number(process.env.IDEMPOTENCY_WINDOW_SECONDS ?? 60),
   auth: { repository, credentials, challenges, rp, audit },
   decorate: (instance) => {
-    instance.get('/firmar', (_req, res) => {
-      res.sendFile(path.join(here, 'auth', 'firmar.html'));
+    // Páginas con CSP + nonce por petición (ver src/web/pages.ts).
+    instance.get('/firmar', (_req, res, next) => {
+      sendPage(res, path.join(here, 'auth', 'firmar.html')).catch(next);
     });
     instance.get('/webauthn.js', (_req, res) => {
       res.sendFile(
         path.join(here, '..', 'node_modules', '@simplewebauthn', 'browser', 'dist', 'bundle', 'index.umd.min.js'),
       );
     });
-    instance.get('/panel', (_req, res) => {
-      res.sendFile(path.join(here, 'web', 'panel.html'));
+    instance.get('/panel', (_req, res, next) => {
+      sendPage(res, path.join(here, 'web', 'panel.html')).catch(next);
     });
     instance.get('/', (_req, res) => {
       res.redirect('/panel');

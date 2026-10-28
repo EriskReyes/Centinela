@@ -147,6 +147,8 @@ describe('el registro captura todo', () => {
         'engine_decision',
         'signature_requested',
         'action_signed',
+        // Firmado = ejecutado: el conector corre y queda auditado.
+        'action_executed',
       ]);
       const signature = entries[3];
       assert.equal(signature?.actor, authenticator.id);
@@ -296,5 +298,35 @@ describe('consultas', () => {
       const res = await h.get('/api/audit/no-existe');
       assert.equal(res.status, 404);
     });
+  });
+});
+
+describe('integridad bajo concurrencia', () => {
+  it('cien escrituras simultáneas dejan la cadena íntegra y sin huecos', async () => {
+    const audit = createAuditService({ repository: new InMemoryAuditRepository(), anchorEvery: 0 });
+    await Promise.all(
+      Array.from({ length: 100 }, (_, i) =>
+        audit.append({ eventType: 'action_proposed', actionId: `a${i}`, actor: 'agente', at: new Date() }),
+      ),
+    );
+    assert.deepEqual(await audit.verify(), { ok: true, total: 100, firstBreak: null });
+  });
+
+  it('un fallo al escribir no bloquea la cola para las siguientes', async () => {
+    const repository = new InMemoryAuditRepository();
+    const insert = repository.insert.bind(repository);
+    let failNext = true;
+    repository.insert = async (entry) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('disco lleno');
+      }
+      return insert(entry);
+    };
+    const audit = createAuditService({ repository, anchorEvery: 0 });
+    const event = { eventType: 'action_proposed' as const, actionId: 'x', actor: 'agente', at: new Date() };
+    await assert.rejects(audit.append(event));
+    await audit.append(event);
+    assert.equal((await audit.list({ limit: 10 })).length, 1);
   });
 });

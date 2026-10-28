@@ -35,5 +35,6 @@ Regla de oro: **el `.env` de producción nunca se parece al de desarrollo** — 
 - Delegación de firma con vencimiento (suplentes formales).
 - Multi-tenant e identidad federada (hoy: tokens estáticos de agente y de admin, ver [`docs/11-acceso.md`](11-acceso.md)).
 - Bloqueo compartido del tope acumulado entre varias instancias (hoy la sección crítica es por proceso).
+- La cola que serializa las escrituras del registro de auditoría también es por proceso: con varias instancias contra el mismo Mongo, el índice único de `seq` impide duplicar una entrada, pero una escritura concurrente puede fallar y hay que reintentarla. Para varias instancias, una sola instancia escritora o un contador atómico en Mongo.
 - Alta disponibilidad y transacciones multi-documento para la doble escritura acción+auditoría (ver [`docs/05-auditoria.md`](05-auditoria.md)).
 - Ver detalle completo en [`docs/07-ataques.md`](07-ataques.md) y [`docs/08-canal-cruzado.md`](08-canal-cruzado.md).

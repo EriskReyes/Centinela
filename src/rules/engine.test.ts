@@ -167,6 +167,53 @@ describe('matchesPattern', () => {
     assert.equal(matchesPattern('amazon.es', 'amazon.*'), true);
     assert.equal(matchesPattern('x-amazon.es', 'amazon.*'), false);
   });
+
+  it('admite * en cualquier posición y, si se pide, ignora mayúsculas', () => {
+    assert.equal(matchesPattern('repo:x/sub/.env.prod', '*/.env*'), true);
+    assert.equal(matchesPattern('repo:x/docs/id_rsa.pub', '*id_rsa*'), true);
+    assert.equal(matchesPattern('CRYPTO:binance', 'crypto:*'), false);
+    assert.equal(matchesPattern('CRYPTO:binance', 'crypto:*', true), true);
+    assert.equal(matchesPattern('a.b', 'a?b'), false);
+  });
+});
+
+describe('evaluateAction — rutas peligrosas', () => {
+  const file = (destination: string) =>
+    evaluate(makeAction({ actionType: 'file_change', amountMinor: undefined, currency: undefined, operation: 'modify', contentHash: 'c0ffee'.repeat(10) + 'c0ff', destination }), DEFAULT_POLICY)
+      .decision;
+
+  it("'..' nunca pasa por estar dentro de una carpeta de confianza", () => {
+    assert.equal(file('repo:centinela/docs/../.env'), 'block');
+    assert.equal(file('repo:centinela\\docs\\..\\src\\auth.ts'), 'block');
+  });
+
+  it('.env, .ssh, .git, /etc y Windows se bloquean en cualquier carpeta y con cualquier grafía', () => {
+    for (const destination of [
+      '.env.produccion',
+      'repo:centinela/.env',
+      'repo:centinela/config/.ENV.local',
+      '/home/u/.ssh/id_rsa',
+      'repo:centinela/.git/config',
+      '/etc/passwd',
+      'c:/windows/system32/x.dll',
+      'C:\\WINDOWS\\System32\\x.dll',
+    ]) {
+      assert.equal(file(destination), 'block', destination);
+    }
+  });
+
+  it('las barras repetidas o invertidas no sacan una ruta de confianza de su carpeta', () => {
+    assert.equal(file('repo:centinela//docs/./guia.md'), 'allow');
+    assert.equal(file('repo:centinela\\docs\\guia.md'), 'allow');
+  });
+
+  it('los prohibidos de pagos tampoco distinguen mayúsculas', () => {
+    assert.equal(evaluate(makeAction({ destination: 'CRYPTO:binance' }), DEFAULT_POLICY).decision, 'block');
+  });
+
+  it('un destino con caracteres de control se bloquea', () => {
+    assert.equal(file('repo:centinela/docs/guia.md\u0000.sh'), 'block');
+  });
 });
 
 describe('applyEngineDecision', () => {
@@ -248,5 +295,67 @@ describe('evaluateAction — tope acumulado sin firma', () => {
   it('no afecta a data_access (no hay importe que sumar)', () => {
     const action = makeAction({ actionType: 'data_access', amountMinor: undefined, destination: 'dataset:publico-ventas' });
     assert.equal(evaluate(action, DEFAULT_POLICY, 10_000_00).decision, 'allow');
+  });
+});
+
+describe('evaluateAction — tipos no monetarios (archivos y programa)', () => {
+  const file = (destination: string, operation = 'modify') =>
+    makeAction({ actionType: 'file_change', amountMinor: undefined, operation, contentHash: 'c0ffee'.repeat(10) + 'c0ff', destination });
+
+  it('archivos: ruta de confianza → allow, ruta sensible → block, ruta nueva → sign', () => {
+    assert.equal(evaluate(file('repo:centinela/docs/guia.md'), DEFAULT_POLICY).decision, 'allow');
+    assert.equal(evaluate(file('.env.produccion'), DEFAULT_POLICY).decision, 'block');
+    const nueva = evaluate(file('repo:centinela/src/nuevo.ts', 'create'), DEFAULT_POLICY);
+    assert.equal(nueva.decision, 'sign');
+    assert.equal(nueva.requiredSignatures, 1);
+    // Los cambios de archivos solo los firma un autorizador, no cualquier empleado.
+    assert.deepEqual(nueva.requiredRoles, ['autorizador']);
+  });
+
+  it('borrar pide firma aunque el archivo esté en una carpeta de confianza', () => {
+    const borrar = evaluate(
+      makeAction({ actionType: 'file_change', amountMinor: undefined, operation: 'delete', destination: 'repo:centinela/docs/guia.md' }),
+      DEFAULT_POLICY,
+    );
+    assert.equal(borrar.decision, 'sign');
+    assert.ok(borrar.reasons.join(' ').includes("'delete'"));
+  });
+
+  it('un despliegue pide firma aunque alguien marque su destino como de confianza', () => {
+    const policy: Policy = { ...DEFAULT_POLICY, destinationTrusted: [...DEFAULT_POLICY.destinationTrusted, 'deploy:*'] };
+    const deploy = evaluate(
+      makeAction({ actionType: 'program_change', amountMinor: undefined, operation: 'deploy', contentHash: 'ab'.repeat(32), destination: 'deploy:staging' }),
+      policy,
+    );
+    assert.equal(deploy.decision, 'sign');
+    assert.equal(deploy.requiredSignatures, 2);
+  });
+
+  it('programa: TODO cambio exige dos autorizadores; producción bloqueada', () => {
+    const staging = evaluate(
+      makeAction({
+        actionType: 'program_change',
+        amountMinor: undefined,
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        destination: 'deploy:staging',
+      }),
+      DEFAULT_POLICY,
+    );
+    assert.equal(staging.decision, 'sign');
+    assert.equal(staging.requiredSignatures, 2);
+    assert.deepEqual(staging.requiredRoles, ['autorizador']);
+
+    const prod = evaluate(
+      makeAction({
+        actionType: 'program_change',
+        amountMinor: undefined,
+        operation: 'deploy',
+        contentHash: 'c0ffee'.repeat(10) + 'c0ff',
+        destination: 'deploy:produccion',
+      }),
+      DEFAULT_POLICY,
+    );
+    assert.equal(prod.decision, 'block');
   });
 });

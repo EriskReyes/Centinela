@@ -7,3 +7,8 @@ coverage/
 *.log
 # Anclas de auditoría: copia externa de la cabeza de la cadena (no versionar)
 anchors.log
+# Carpetas temporales de los tests (si una ejecución falla a mitad, quedan restos)
+.tmp-*
+# Configuración local del IDE y lockfile de npm (el proyecto usa pnpm)
+.idea/
+package-lock.json

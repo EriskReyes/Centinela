@@ -36,6 +36,8 @@ export const TypePolicySchema = z.object({
   cumulativeAllowLimitMinor: z.number().int().nonnegative().optional(),
   /** Ventana del tope acumulado, en minutos. */
   cumulativeWindowMinutes: z.number().int().positive().optional(),
+  /** Operaciones que SIEMPRE piden firma, aunque el destino sea de confianza (p. ej. delete). */
+  signOperations: z.array(z.string().min(1)).optional(),
 });
 export type TypePolicy = z.infer<typeof TypePolicySchema>;
 
@@ -48,6 +50,8 @@ export const PolicySchema = z
       reservation: TypePolicySchema,
       loan: TypePolicySchema,
       data_access: TypePolicySchema,
+      file_change: TypePolicySchema,
+      program_change: TypePolicySchema,
     }),
     /** Destinos prohibidos; un patrón terminado en '*' coincide por prefijo. */
     destinationDeny: z.array(z.string().min(1)),
@@ -143,9 +147,45 @@ export const DEFAULT_POLICY: Policy = {
     },
     loan: { allowed: false },
     data_access: { allowed: true },
+    // Archivos: lo de confianza se permite, lo nuevo se firma, lo peligroso
+    // (.env, .ssh, .git, /etc, Windows) se bloquea por los patrones de destino.
+    // Borrar SIEMPRE pide firma, y solo firman autorizadores.
+    file_change: {
+      allowed: true,
+      signOperations: ['delete'],
+      quorumSignatures: 1,
+      quorumRoles: ['autorizador'],
+    },
+    // Cambios en el programa: SIEMPRE dos autorizadores (todas las operaciones
+    // piden firma, aunque alguien marque el destino como de confianza).
+    program_change: {
+      allowed: true,
+      signOperations: ['deploy', 'configure', 'rollback', 'restart'],
+      quorumSignatures: 2,
+      quorumRoles: ['autorizador'],
+    },
   },
-  destinationDeny: ['crypto:*', 'dataset:secretos-*'],
-  destinationTrusted: ['amazon.es', 'adobe.com', 'dataset:publico-*'],
+  destinationDeny: [
+    'crypto:*',
+    'dataset:secretos-*',
+    // Rutas: `*` cruza carpetas y la comparación ignora mayúsculas y `\`/`/`.
+    '.env*',
+    '*/.env*',
+    '.ssh/*',
+    '*/.ssh/*',
+    '*id_rsa*',
+    '*/.git/*',
+    '/etc/*',
+    'C:/Windows/*',
+    'deploy:produccion',
+  ],
+  destinationTrusted: [
+    'amazon.es',
+    'adobe.com',
+    'dataset:publico-*',
+    'repo:centinela/docs/*',
+    'backups:diarios/*',
+  ],
   requireSignOnNewDestination: true,
   pendingTtlMinutes: 15,
 };

@@ -186,10 +186,13 @@ describe('integración real con MongoDB', { skip: !available }, () => {
         decisions: Array<{ stage: string; decision: string; by: string }>;
       };
       assert.equal(doc.status, 'approved');
-      assert.equal(doc.decisions.length, 2);
+      // motor → firma → ejecución (lo firmado se ejecuta y queda en Mongo).
+      assert.equal(doc.decisions.length, 3);
       assert.equal(doc.decisions[1]?.stage, 'signature');
       assert.equal(doc.decisions[1]?.decision, 'approved');
       assert.equal(doc.decisions[1]?.by, authenticator.id);
+      assert.equal(doc.decisions[2]?.stage, 'execution');
+      assert.equal(doc.decisions[2]?.decision, 'approved');
 
       // 5. La firma no se puede reutilizar: la acción ya está decidida (409),
       //    y el reto además se consumió en la verificación anterior.

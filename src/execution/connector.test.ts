@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AgentActionSchema } from '../domain/action.ts';
-import { appendExecutionRecord, executeAction } from './connector.ts';
+import { appendExecutionRecord, contentMatches, executeAction } from './connector.ts';
 
 function makeAction(overrides: Record<string, unknown> = {}) {
   const parsed = AgentActionSchema.safeParse({
@@ -82,5 +82,47 @@ describe('appendExecutionRecord', () => {
     const now = new Date('2026-10-26T10:02:00Z');
     const updated = appendExecutionRecord(action, executeAction(action), now, () => 'x-2');
     assert.equal(updated.decisions[0]?.decision, 'rejected');
+  });
+});
+
+describe('tipos no monetarios', () => {
+  it('simula cambios de archivo con su operación', () => {
+    const file = executeAction(
+      makeAction({ actionType: 'file_change', amountMinor: undefined, operation: 'modify', contentHash: 'c0ffee'.repeat(10) + 'c0ff', destination: 'repo:centinela/docs/x.md' }),
+    );
+    assert.equal(file.ok, true);
+    assert.equal(file.connector, 'simulador-archivos');
+    assert.ok(file.detail.includes('modify'));
+    assert.ok(file.detail.includes('repo:centinela/docs/x.md'));
+  });
+
+  it('simula cambios de programa con su operación', () => {
+    const program = executeAction(
+      makeAction({ actionType: 'program_change', amountMinor: undefined, operation: 'deploy', contentHash: 'c0ffee'.repeat(10) + 'c0ff', destination: 'deploy:staging' }),
+    );
+    assert.equal(program.ok, true);
+    assert.equal(program.connector, 'simulador-programa');
+    assert.ok(program.detail.includes('deploy'));
+    assert.ok(program.detail.includes('deploy:staging'));
+  });
+});
+
+describe('contentMatches: el contenido escrito es el firmado', () => {
+  const content = 'Guía actualizada con los límites nuevos del panel.\n';
+  const hash = createHash('sha256').update(content).digest('hex');
+  const action = makeAction({ actionType: 'file_change', amountMinor: undefined, operation: 'modify', contentHash: hash, destination: 'repo:centinela/docs/guia.md' });
+
+  it('acepta exactamente el contenido firmado', () => {
+    assert.equal(contentMatches(action, content), true);
+    assert.equal(contentMatches(action, Buffer.from(content)), true);
+  });
+
+  it('rechaza cualquier cambio posterior a la firma', () => {
+    assert.equal(contentMatches(action, content.replace('nuevos', 'nuevo')), false);
+    assert.equal(contentMatches(action, content + ' '), false);
+  });
+
+  it('sin hash firmado, nunca coincide', () => {
+    assert.equal(contentMatches({ ...action, contentHash: undefined }, content), false);
   });
 });

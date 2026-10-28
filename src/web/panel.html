@@ -207,6 +207,7 @@
     </div>
     <div class="save-row">
       <button class="btn primary" id="savePolicy" type="button">Guardar cambios</button>
+      <button class="btn danger" id="strictMode" type="button" title="Vacía la lista de confianza y pone a cero los límites automáticos: toda acción (dinero, archivos, programa) requiere firma humana">Modo estricto: todo requiere firma</button>
       <span class="version-note" id="policyVersion"></span>
     </div>
     <div class="issues" id="policyIssues"></div>
@@ -226,7 +227,8 @@
       <label>Tipo
         <select id="filterType">
           <option value="">Todos</option>
-          <option>payment</option><option>reservation</option><option>loan</option><option>data_access</option>
+          <option>payment</option><option>reservation</option><option>loan</option>
+          <option>data_access</option><option>file_change</option><option>program_change</option>
         </select>
       </label>
       <label>Agente
@@ -357,7 +359,9 @@ async function loadPending() {
     actions.map((a) =>
       '<tr>' +
       '<td class="num">' + fmtMoney(a.amountMinor, a.currency) + '</td>' +
-      '<td>' + esc(a.actionType) + ' · <span class="mono">' + esc(a.destination) + '</span></td>' +
+      '<td>' + esc(a.actionType) + (a.operation ? ' (' + esc(a.operation) + ')' : '') + ' · <span class="mono">' + esc(a.destination) + '</span>' +
+      // Huella del contenido exacto que se firmaría: se compara con /firmar.
+      (a.contentHash ? '<br><span class="mono">sha256 ' + esc(a.contentHash.slice(0, 16)) + '…</span>' : '') + '</td>' +
       '<td style="max-width:340px">' + esc(a.decisions[0]?.reason ?? a.justification) + '</td>' +
       '<td class="num">' + (a.signatures?.length ?? 0) + ' de ' + (a.requiredSignatures ?? 1) + '</td>' +
       '<td class="nowrap">' + fmtDate(a.expiresAt) + '</td>' +
@@ -378,7 +382,14 @@ async function loadPending() {
 }
 
 /* ── reglas ───────────────────────────────────────────── */
-const TYPE_LABEL = { payment: 'Pagos', reservation: 'Reservas', loan: 'Créditos', data_access: 'Datos' };
+const TYPE_LABEL = {
+  payment: 'Pagos',
+  reservation: 'Reservas',
+  loan: 'Créditos',
+  data_access: 'Datos',
+  file_change: 'Archivos',
+  program_change: 'Programa',
+};
 let currentPolicy = null;
 
 async function loadPolicy() {
@@ -442,6 +453,21 @@ $('savePolicy').addEventListener('click', async () => {
     $('policyIssues').textContent = res.body.error + '\n' + (res.body.issues ?? []).map((i) => i.path + ': ' + i.message).join('\n');
     toast('No se pudo guardar: revisa las reglas', true);
   }
+});
+
+$('strictMode').addEventListener('click', async () => {
+  // Modo estricto: nada se aprueba solo. Sin lista de confianza y con firma
+  // para todo destino fuera de ella, TODA acción (dinero, archivos, cambios
+  // en el programa) pasa por una persona. Es un cambio fuerte: se confirma.
+  if (!confirm('Modo estricto: se vacía la lista de destinos de confianza y TODA acción requerirá firma humana. ¿Guardar la política así?')) return;
+  for (const row of $('policyBody').querySelectorAll('tr[data-type]')) {
+    const allow = row.querySelector('.p-allow');
+    if (allow) allow.value = '0.00';
+  }
+  $('trustedInput').value = '';
+  $('newDestCheck').checked = true;
+  toast('Modo estricto aplicado: guardando la política…');
+  $('savePolicy').click();
 });
 
 /* ── historial ────────────────────────────────────────── */

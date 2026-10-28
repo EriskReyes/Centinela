@@ -26,10 +26,35 @@ export function wasAutoApproved(action: AgentAction): boolean {
   return action.decisions.some((d) => d.stage === 'engine' && d.decision === 'allow');
 }
 
+/**
+ * Condición para sustituir (concurrencia optimista): la acción guardada debe
+ * seguir como estaba cuando se leyó. Si dos personas firman a la vez, la
+ * segunda escritura no pisa la firma de la primera: falla y se reintenta.
+ */
+export interface ReplaceExpectation {
+  status: ActionStatus;
+  /** Número de firmas parciales que tenía al leerla. */
+  signatureCount?: number;
+  /** false → solo si todavía no pasó por un conector. */
+  executed?: boolean;
+}
+
+export function meetsExpectation(current: AgentAction, expected: ReplaceExpectation): boolean {
+  return (
+    current.status === expected.status &&
+    (expected.signatureCount === undefined || (current.signatures?.length ?? 0) === expected.signatureCount) &&
+    (expected.executed === undefined ||
+      current.decisions.some((d) => d.stage === 'execution') === expected.executed)
+  );
+}
+
 export interface ActionRepository {
   insert(action: AgentAction): Promise<void>;
-  /** Sustituye la acción completa si existe; devuelve false si no estaba. */
-  replace(action: AgentAction): Promise<boolean>;
+  /**
+   * Sustituye la acción completa si existe (y, si se pasa `expected`, si sigue
+   * en ese estado); devuelve false si no estaba o alguien la cambió antes.
+   */
+  replace(action: AgentAction, expected?: ReplaceExpectation): Promise<boolean>;
   findById(id: string): Promise<AgentAction | null>;
   findByMetadataKey(key: string): Promise<AgentAction | null>;
   list(filter: ActionListFilter): Promise<AgentAction[]>;
@@ -58,8 +83,9 @@ export class InMemoryActionRepository implements ActionRepository {
     this.byId.set(action.id, action);
   }
 
-  async replace(action: AgentAction): Promise<boolean> {
-    if (!this.byId.has(action.id)) {
+  async replace(action: AgentAction, expected?: ReplaceExpectation): Promise<boolean> {
+    const current = this.byId.get(action.id);
+    if (current === undefined || (expected !== undefined && !meetsExpectation(current, expected))) {
       return false;
     }
     this.byId.set(action.id, action);

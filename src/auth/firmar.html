@@ -25,6 +25,7 @@
   .msg { margin-top: 12px; font-size: .9rem; min-height: 1.2em; }
   .ok { color: #3fb950; } .err { color: #f85149; }
   .empty { color: #8b98a5; }
+  .mono { font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
   code { background: #1a2129; padding: 2px 6px; border-radius: 6px; font-size: .85em; }
 </style>
 </head>
@@ -52,6 +53,14 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
+/** Crea un elemento con texto PLANO o hijos: nunca interpreta HTML. */
+function el(tag, className, content) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (Array.isArray(content)) node.append(...content);
+  else if (content !== undefined) node.textContent = String(content);
+  return node;
+}
 // DEMO: en producción los roles los asigna un administrador, no el usuario.
 const ROLE_BY_USER = { maria: 'autorizador', ana: 'autorizador', carlos: 'empleado' };
 
@@ -122,18 +131,25 @@ async function loadQueue() {
     card.className = 'card';
     const amount = action.amountMinor !== undefined && action.amountMinor !== null
       ? fmt(action.amountMinor, action.currency)
-      : action.currency;
+      : (action.operation ?? action.actionType);
     const progress = (action.requiredSignatures ?? 1) > 1
       ? 'firmas: ' + (action.signatures?.length ?? 0) + ' de ' + (action.requiredSignatures ?? 1) + ' · '
       : '';
-    card.innerHTML =
-      '<div class="row"><span class="big">' + amount + '</span><span class="meta">' + action.actionType + ' · ' + action.destination + '</span></div>' +
-      '<div class="meta">' + progress + action.agentId + ' · ' + new Date(action.createdAt).toLocaleString() + '</div>' +
-      '<div class="reason">' + (action.decisions[0] && action.decisions[0].reason ? action.decisions[0].reason : '') + '</div>' +
-      '<div class="row" style="margin-top:12px">' +
-        '<button class="secondary" data-act="approve">✔ Aprobar y firmar</button>' +
-        '<button class="danger" data-act="reject">✖ Rechazar y firmar</button>' +
-      '</div><div class="msg"></div>';
+    // TODO lo que viene de la acción lo escribe el AGENTE: va como texto
+    // (textContent), nunca como HTML. Un destino con etiquetas se ve, no se ejecuta.
+    card.append(
+      el('div', 'row', [el('span', 'big', amount), el('span', 'meta', action.actionType + ' · ' + action.destination)]),
+      el('div', 'meta', progress + action.agentId + ' · ' + new Date(action.createdAt).toLocaleString()),
+      el('div', 'reason', action.decisions[0]?.reason ?? ''),
+      el('div', 'reason', 'Justificación del agente: ' + action.justification),
+      ...(action.contentHash ? [el('div', 'meta mono', 'Contenido (SHA-256): ' + action.contentHash)] : []),
+    );
+    const buttons = el('div', 'row');
+    buttons.style.marginTop = '12px';
+    buttons.append(el('button', 'secondary', '✔ Aprobar y firmar'), el('button', 'danger', '✖ Rechazar y firmar'));
+    buttons.children[0].dataset.act = 'approve';
+    buttons.children[1].dataset.act = 'reject';
+    card.append(buttons, el('div', 'msg'));
     card.querySelectorAll('button').forEach((btn) =>
       btn.addEventListener('click', () => decide(action.id, btn.dataset.act, btn, card.querySelector('.msg'))));
     queue.appendChild(card);

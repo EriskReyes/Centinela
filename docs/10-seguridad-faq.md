@@ -47,6 +47,18 @@ Lo que **no** puedo reescribir son los hechos que ya salieron de mi alcance: los
 
 No, en sentido estricto: no previene nada, no reduce ni una capacidad del atacante. Es **tamper-evidence**: el precinto de una caja no detiene al ladrón, le dice a la víctima que la caja fue abierta. Su valor solo se realiza dentro de un proceso — alguien compara, alguien escucha el silencio, alguien investiga. Convierte "fraude silencioso para siempre" en "fraude que además debe comprometer el receptor externo o sobrevivir a la comparación".
 
+## 5 · ¿Puede el agente saltarse la firma?
+
+**Con su token de agente, ¿puede aprobar su propio pago, registrar una llave o cambiar la política?**
+
+No. El token de agente solo abre `POST /api/actions` y `GET /api/actions/:id` (de sus propias acciones). Todo lo demás de `/api` es de admin por defecto: firmar, registrar llaves, política, cola y auditoría responden 403 y el intento queda auditado como `access_denied`.
+
+**¿Y troceando un pago grande en muchos pequeños, o disfrazando un borrado?**
+
+Los pagos pequeños suman contra un tope diario por agente; pasado el tope, piden firma (también si llegan en paralelo). Un `delete` o un `deploy` exigen firma por su operación, aunque la ruta sea de confianza; una ruta con `..` se bloquea; y lo que se firma incluye el hash del contenido, así que no se puede firmar un cambio y aplicar otro.
+
+**¿Dónde termina?** Si el agente roba el token de admin, o una persona con llave firma sin leer, la defensa es el registro de auditoría, no la prevención.
+
 ---
 
 **La regla que resume las cuatro respuestas:** di siempre dónde termina la defensa. Un sistema de seguridad honesto no promete protegerlo todo; promete que cada capa falle de forma ruidosa, barata y auditable — y que se sepa exactamente en qué punto deja de ser automático y empieza a depender de una persona.

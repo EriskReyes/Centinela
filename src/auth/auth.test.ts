@@ -15,7 +15,9 @@ import {
   InMemoryChallengeRepository,
   InMemoryCredentialRepository,
 } from './repos.ts';
-import type { RelyingParty } from './webauthnService.ts';
+import { createWebAuthnService, type RelyingParty } from './webauthnService.ts';
+import { AuthError } from './errors.ts';
+import { AgentActionSchema } from '../domain/action.ts';
 import { FakeAuthenticator, tamperAssertion } from './testkit.ts';
 import { challengeFingerprint, challengeForAction } from './signing.ts';
 import { DEFAULT_POLICY } from '../rules/policy.ts';
@@ -587,5 +589,66 @@ describe('revocación de llaves (llave perdida)', () => {
       const res = await authedFetch(`${h.base}/api/webauthn/credentials/no-existe`, { method: 'DELETE' });
       assert.equal(res.status, 404);
     });
+  });
+});
+
+describe('lo firmado se ejecuta', () => {
+  it('al aprobar con la llave, el conector corre y queda registrado', async () => {
+    await withHarness(async (h) => {
+      const authenticator = await registerKey(h.post);
+      const actionId = await proposePending(h.post);
+      const options = await h.post(`/api/actions/${actionId}/sign/options`, { decision: 'approve' });
+      const signed = await h.post(`/api/actions/${actionId}/sign/verify`, {
+        decision: 'approve',
+        response: authenticator.assert(options.body.options),
+      });
+      assert.equal(signed.status, 200);
+      assert.equal(signed.body.execution.ok, true);
+      const stages = (signed.body.action.decisions as Array<{ stage: string }>).map((d) => d.stage);
+      assert.deepEqual(stages, ['engine', 'signature', 'execution']);
+
+      const stored = await h.get(`/api/actions/${actionId}`);
+      assert.equal(stored.body.action.decisions.at(-1).stage, 'execution');
+    });
+  });
+
+  it('un rechazo no ejecuta nada', async () => {
+    await withHarness(async (h) => {
+      const authenticator = await registerKey(h.post);
+      const actionId = await proposePending(h.post);
+      const options = await h.post(`/api/actions/${actionId}/sign/options`, { decision: 'reject' });
+      const signed = await h.post(`/api/actions/${actionId}/sign/verify`, {
+        decision: 'reject',
+        response: authenticator.assert(options.body.options),
+      });
+      assert.equal(signed.status, 200);
+      assert.equal(signed.body.execution, undefined);
+      assert.ok(!(signed.body.action.decisions as Array<{ stage: string }>).some((d) => d.stage === 'execution'));
+    });
+  });
+});
+
+describe('reto ligado al estado de la acción', () => {
+  it('una firma sobre un reto viejo no vale si la acción cambió en medio (409)', async () => {
+    const credentials = new InMemoryCredentialRepository();
+    const service = createWebAuthnService({ rp: RP, credentials, challenges: new InMemoryChallengeRepository() });
+    const authenticator = new FakeAuthenticator(RP.rpID, RP.origin);
+    const reg = await service.registrationOptions('maria', 'María');
+    await service.verifyRegistration('maria', 'autorizador', authenticator.register(reg));
+
+    const action = AgentActionSchema.parse({
+      id: randomUUID(),
+      ...pay({ amountMinor: 700_00 }),
+      status: 'pending_signature',
+      createdAt: new Date(),
+      decisions: [],
+    });
+    const options = await service.signOptions(action, 'approve', 'maria');
+    // Otra persona firmó entre el reto y la respuesta.
+    const changed = { ...action, signatures: [{ keyId: 'otra', userId: 'carlos', role: 'autorizador', at: new Date() }] };
+    await assert.rejects(
+      service.verifySignature(changed, 'approve', 'maria', authenticator.assert(options)),
+      (err: AuthError) => err.status === 409,
+    );
   });
 });

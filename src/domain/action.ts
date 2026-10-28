@@ -11,8 +11,29 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
-export const ACTION_TYPES = ['payment', 'reservation', 'loan', 'data_access'] as const;
+export const ACTION_TYPES = ['payment', 'reservation', 'loan', 'data_access', 'file_change', 'program_change'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
+
+/** Tipos monetarios: exigen amountMinor (el resto no usa importe). */
+export const MONEY_ACTION_TYPES = ['payment', 'reservation', 'loan'] as const;
+
+/** Operaciones válidas por tipo no monetario: texto libre abriría huecos ("borrar" ≠ "delete"). */
+export const OPERATIONS_BY_TYPE = {
+  file_change: ['create', 'modify', 'delete'],
+  program_change: ['deploy', 'configure', 'rollback', 'restart'],
+} as const satisfies Partial<Record<ActionType, readonly string[]>>;
+
+/**
+ * Operaciones que cambian CONTENIDO: exigen contentHash (SHA-256 del archivo
+ * nuevo, del diff o del artefacto a desplegar). Firmar sin él sería firmar
+ * "cambia guia.md" sin saber a qué.
+ */
+const CONTENT_OPERATIONS: Record<string, readonly string[]> = {
+  file_change: ['create', 'modify'],
+  program_change: ['deploy', 'configure', 'rollback'],
+};
+
+const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 export const ACTION_STATUSES = ['proposed', 'pending_signature', 'approved', 'rejected', 'expired'] as const;
 export type ActionStatus = (typeof ACTION_STATUSES)[number];
@@ -44,10 +65,14 @@ export const AgentActionSchema = z
     actionType: z.enum(ACTION_TYPES),
     /** Importe en unidades menores; ausente para data_access. */
     amountMinor: z.number().int().nonnegative().optional(),
-    /** Código ISO 4217 (EUR, USD, …). */
-    currency: z.string().regex(ISO_4217, 'currency debe ser un código ISO 4217 válido'),
-    /** Destino de la acción: cuenta/IBAN, proveedor, dataset, URL… */
+    /** Código ISO 4217 (EUR, USD, …). Obligatorio solo para tipos monetarios. */
+    currency: z.string().regex(ISO_4217, 'currency debe ser un código ISO 4217 válido').optional(),
+    /** Destino de la acción: cuenta/IBAN, proveedor, dataset, URL, ruta de archivo… */
     destination: z.string().min(1),
+    /** Operación para tipos no monetarios: create | modify | delete | read | deploy… */
+    operation: z.string().min(1).optional(),
+    /** SHA-256 (hex) del contenido exacto: entra en el reto de firma y el conector lo comprueba. */
+    contentHash: z.string().regex(SHA256_HEX, 'contentHash debe ser un SHA-256 en hexadecimal (64 caracteres)').optional(),
     /** Por qué el agente necesita esta acción; el humano que firma la lee. */
     justification: z.string().min(10, 'justification debe explicar por qué el agente necesita la acción'),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -73,7 +98,7 @@ export const AgentActionSchema = z
       .optional(),
   })
   .superRefine((action, ctx) => {
-    if (action.actionType !== 'data_access') {
+    if ((MONEY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {
       if (action.amountMinor === undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -85,6 +110,29 @@ export const AgentActionSchema = z
           code: z.ZodIssueCode.custom,
           path: ['amountMinor'],
           message: 'amountMinor debe ser mayor que cero',
+        });
+      }
+      if (action.currency === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['currency'],
+          message: `${action.actionType} requiere currency (ISO 4217)`,
+        });
+      }
+    }
+    if (action.actionType === 'file_change' || action.actionType === 'program_change') {
+      const valid: readonly string[] = OPERATIONS_BY_TYPE[action.actionType];
+      if (action.operation === undefined || !valid.includes(action.operation)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['operation'],
+          message: `${action.actionType} requiere operation: ${valid.join(' | ')}`,
+        });
+      } else if (CONTENT_OPERATIONS[action.actionType]?.includes(action.operation) && action.contentHash === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['contentHash'],
+          message: `${action.actionType}/${action.operation} requiere contentHash (SHA-256 del contenido exacto)`,
         });
       }
     }

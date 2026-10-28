@@ -19,6 +19,8 @@ export interface DerivableProposal {
   amountMinor?: unknown;
   currency?: unknown;
   destination?: unknown;
+  operation?: unknown;
+  contentHash?: unknown;
   justification?: unknown;
 }
 
@@ -32,6 +34,10 @@ export function deriveIdempotencyKey(body: DerivableProposal, now: Date, windowS
         amountMinor: body.amountMinor ?? null,
         currency: body.currency ?? null,
         destination: body.destination ?? null,
+        // Sin estos dos, un delete justo después de un modify del mismo archivo
+        // se tomaría por un reintento del modify y nunca llegaría a evaluarse.
+        operation: body.operation ?? null,
+        contentHash: body.contentHash ?? null,
         justification: body.justification ?? null,
         bucket,
       }),

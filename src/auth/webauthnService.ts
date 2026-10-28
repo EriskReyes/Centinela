@@ -120,6 +120,11 @@ export function createWebAuthnService(deps: WebAuthnServiceDeps) {
       if (expectedChallenge === null) {
         throw new AuthError('no hay un reto pendiente para esta firma (¿reutilizando una firma?)');
       }
+      // El reto se emitió para la acción TAL COMO ERA entonces (con sus firmas
+      // previas). Si otra persona firmó en medio, ya no es la misma acción.
+      if (expectedChallenge !== challengeForAction(action, decision)) {
+        throw new AuthError('la acción cambió desde que pediste el reto: vuelve a cargarla y firma de nuevo', 409);
+      }
       const credential = await deps.credentials.findById(response.id);
       if (credential === null) {
         throw new AuthError('la llave usada no está registrada en Centinela');

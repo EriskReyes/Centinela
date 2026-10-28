@@ -48,13 +48,17 @@ export function createJournalFailureSink(filePath: string): (failure: AnchorFail
   };
 }
 
+const WEBHOOK_TIMEOUT_MS = 5_000;
+
 /** Copia externa: webhook (o un servicio de correo) fuera de tu infraestructura. */
-export function createWebhookAnchorSink(url: string): AnchorSink {
+export function createWebhookAnchorSink(url: string, timeoutMs = WEBHOOK_TIMEOUT_MS): AnchorSink {
   return async (anchor) => {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(anchor),
+      // Un webhook colgado no debe dejar el anclaje esperando para siempre.
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       throw new Error(`anclaje webhook fallido: HTTP ${res.status}`);

@@ -10,12 +10,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACTION_TYPES,
+  MONEY_ACTION_TYPES,
   STATUS_BY_ENGINE_DECISION,
   type AgentAction,
   type DecisionRecord,
   type EngineDecision,
 } from '../domain/action.ts';
 import type { Policy } from './policy.ts';
+import { hasControlChars, hasParentSegment, normalizePath } from '../domain/paths.ts';
 
 export interface EngineDecisionResult {
   decision: EngineDecision;
@@ -31,13 +33,19 @@ export interface EngineDecisionResult {
   requiredRoles?: string[];
 }
 
-/** Un patrón terminado en '*' coincide por prefijo; si no, comparación exacta. */
-export function matchesPattern(value: string, pattern: string): boolean {
-  if (pattern.endsWith('*')) {
-    return value.startsWith(pattern.slice(0, -1));
-  }
-  return value === pattern;
+/**
+ * `*` coincide con cualquier secuencia (también con `/`) y puede ir en
+ * cualquier posición: `crypto:*`, `*\/.env*`, `*id_rsa*`. Sin `*`, exacto.
+ * `ignoreCase` para las listas de PROHIBIDOS: ahí distinguir mayúsculas solo
+ * abre huecos (`CRYPTO:x`, `C:/WINDOWS`). Las de confianza son estrictas.
+ */
+export function matchesPattern(value: string, pattern: string, ignoreCase = false): boolean {
+  const escaped = pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^${escaped.join('.*')}$`, ignoreCase ? 'is' : 's').test(value);
 }
+
+/** Tipos cuyo destino es una ruta: se comparan en forma canónica (ver domain/paths.ts). */
+const PATH_ACTION_TYPES: readonly string[] = ['file_change', 'program_change'];
 
 /**
  * Lo que el motor necesita saber del pasado. Lo calcula quien llama (la API
@@ -75,16 +83,17 @@ export function evaluateAction(action: AgentAction, policy: Policy, context: Eva
   if (
     typePolicy.currencies !== undefined &&
     typePolicy.currencies.length > 0 &&
-    !typePolicy.currencies.includes(action.currency)
+    (action.currency === undefined || !typePolicy.currencies.includes(action.currency))
   ) {
     block(
-      `moneda '${action.currency}' no permitida para '${action.actionType}' (permitidas: ${typePolicy.currencies.join(', ')})`,
+      `moneda '${action.currency ?? '—'}' no permitida para '${action.actionType}' (permitidas: ${typePolicy.currencies.join(', ')})`,
     );
   }
 
   // Reglas de importe (solo para acciones monetarias).
-  if (action.actionType !== 'data_access') {
+  if ((MONEY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {
     const amount = action.amountMinor;
+    const currency = action.currency ?? '';
     if (amount === undefined) {
       block(`la acción '${action.actionType}' no trae importe`);
     } else if (amount <= 0) {
@@ -92,12 +101,12 @@ export function evaluateAction(action: AgentAction, policy: Policy, context: Eva
     } else {
       if (typePolicy.signLimitMinor !== undefined && amount > typePolicy.signLimitMinor) {
         block(
-          `importe ${fmtMinor(amount, action.currency)} supera el límite máximo de ${fmtMinor(typePolicy.signLimitMinor, action.currency)}`,
+          `importe ${fmtMinor(amount, currency)} supera el límite máximo de ${fmtMinor(typePolicy.signLimitMinor, currency)}`,
         );
       }
       if (typePolicy.allowLimitMinor !== undefined && amount > typePolicy.allowLimitMinor) {
         sign(
-          `importe ${fmtMinor(amount, action.currency)} supera el límite de aprobación automática de ${fmtMinor(typePolicy.allowLimitMinor, action.currency)}`,
+          `importe ${fmtMinor(amount, currency)} supera el límite de aprobación automática de ${fmtMinor(typePolicy.allowLimitMinor, currency)}`,
         );
         // Cuarto ojos: dentro de la banda de firma, por encima del umbral
         // de quórum hacen falta N personas distintas.
@@ -110,19 +119,36 @@ export function evaluateAction(action: AgentAction, policy: Policy, context: Eva
       const cumulativeLimit = typePolicy.cumulativeAllowLimitMinor;
       if (cumulativeLimit !== undefined && context.autoApprovedInWindowMinor + amount > cumulativeLimit) {
         sign(
-          `gasto sin firma acumulado de '${action.agentId}' (${fmtMinor(context.autoApprovedInWindowMinor, action.currency)} + ${fmtMinor(amount, action.currency)}) supera el tope de ${fmtMinor(cumulativeLimit, action.currency)} en ${typePolicy.cumulativeWindowMinutes} min`,
+          `gasto sin firma acumulado de '${action.agentId}' (${fmtMinor(context.autoApprovedInWindowMinor, currency)} + ${fmtMinor(amount, currency)}) supera el tope de ${fmtMinor(cumulativeLimit, currency)} en ${typePolicy.cumulativeWindowMinutes} min`,
         );
       }
     }
   }
 
-  // Reglas de destino.
+  // Operaciones que siempre exigen firma (borrar, desplegar…), sea cual sea el destino.
+  if (action.operation !== undefined && typePolicy.signOperations?.includes(action.operation)) {
+    sign(`la operación '${action.operation}' de '${action.actionType}' siempre requiere firma humana`);
+  }
+
+  // Reglas de destino. Las rutas se comparan en forma canónica y `..` se
+  // bloquea: `docs/../.env` no puede pasar por "dentro de docs/".
+  const isPath = PATH_ACTION_TYPES.includes(action.actionType);
+  const destination = isPath ? normalizePath(action.destination) : action.destination;
+  if (hasControlChars(action.destination)) {
+    block('el destino contiene caracteres de control');
+  }
+  if (isPath && hasParentSegment(action.destination)) {
+    block(`la ruta '${action.destination}' contiene '..': no se permite salir del directorio`);
+  }
   for (const pattern of policy.destinationDeny) {
-    if (matchesPattern(action.destination, pattern)) {
+    const canonical = isPath ? normalizePath(pattern) : pattern;
+    if (matchesPattern(destination, canonical, true)) {
       block(`destino '${action.destination}' prohibido por la política (patrón '${pattern}')`);
     }
   }
-  const isTrusted = policy.destinationTrusted.some((pattern) => matchesPattern(action.destination, pattern));
+  const isTrusted = policy.destinationTrusted.some((pattern) =>
+    matchesPattern(destination, isPath ? normalizePath(pattern) : pattern),
+  );
   if (policy.requireSignOnNewDestination && !isTrusted) {
     sign(`destino '${action.destination}' no está en la lista de confianza: requiere verificación humana`);
   }
@@ -131,6 +157,18 @@ export function evaluateAction(action: AgentAction, policy: Policy, context: Eva
   let requiredRoles: string[] | undefined;
   if (reasonsByLevel.sign.length > 0 && typePolicy.quorumRoles !== undefined) {
     requiredRoles = typePolicy.quorumRoles;
+  }
+  // Quórum sin umbral de importe (tipos no monetarios como program_change):
+  // TODA firma de este tipo exige N personas. Para tipos monetarios el quórum
+  // lo decide la banda de importe (y un desborde del tope acumulado solo
+  // escala a UNA firma, no al quórum completo).
+  if (
+    reasonsByLevel.sign.length > 0 &&
+    requiredSignatures === undefined &&
+    typePolicy.quorumAboveMinor === undefined &&
+    typePolicy.quorumSignatures !== undefined
+  ) {
+    requiredSignatures = typePolicy.quorumSignatures;
   }
 
   return finish(reasonsByLevel, policy, requiredSignatures, requiredRoles);

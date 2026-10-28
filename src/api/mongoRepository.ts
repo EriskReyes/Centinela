@@ -3,16 +3,34 @@
  */
 import type { AgentAction } from '../domain/action.ts';
 import { ActionModel, actionToDoc, docToAction, type ActionDoc } from '../db/models.ts';
-import type { ActionListFilter, ActionRepository, AutoApprovedFilter } from './repository.ts';
+import type { ActionListFilter, ActionRepository, AutoApprovedFilter, ReplaceExpectation } from './repository.ts';
 
 export class MongoActionRepository implements ActionRepository {
   async insert(action: AgentAction): Promise<void> {
     await ActionModel.create(actionToDoc(action));
   }
 
-  async replace(action: AgentAction): Promise<boolean> {
-    const result = await ActionModel.replaceOne({ _id: action.id }, actionToDoc(action));
-    return result.modifiedCount === 1;
+  async replace(action: AgentAction, expected?: ReplaceExpectation): Promise<boolean> {
+    // La condición va en el filtro: Mongo la comprueba y sustituye de forma atómica.
+    const filter: Record<string, unknown> = { _id: action.id };
+    if (expected !== undefined) {
+      filter.status = expected.status;
+      if (expected.signatureCount !== undefined) {
+        filter.$and = [
+          expected.signatureCount === 0
+            ? { $or: [{ signatures: { $size: 0 } }, { signatures: { $exists: false } }] }
+            : { signatures: { $size: expected.signatureCount } },
+        ];
+      }
+      if (expected.executed !== undefined) {
+        filter.decisions = expected.executed
+          ? { $elemMatch: { stage: 'execution' } }
+          : { $not: { $elemMatch: { stage: 'execution' } } };
+      }
+    }
+    const result = await ActionModel.replaceOne(filter, actionToDoc(action));
+    // matchedCount, no modifiedCount: sustituir por un documento idéntico también es éxito.
+    return result.matchedCount === 1;
   }
 
   async findById(id: string): Promise<AgentAction | null> {

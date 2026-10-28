@@ -30,6 +30,24 @@ export class InMemoryPolicyProvider implements PolicyProvider {
   }
 }
 
+/**
+ * Políticas guardadas por versiones anteriores, sin los tipos de acción que
+ * llegaron después. Esos tipos entran DESHABILITADOS: actualizar Centinela no
+ * puede dar permisos que nadie aprobó (un agente no empieza a borrar archivos
+ * solo porque el servidor se actualizó). El admin los habilita en el panel.
+ */
+export function upgradeStoredPolicy(doc: { types?: Record<string, unknown> } & Record<string, unknown>): Policy {
+  const types: Record<string, unknown> = {};
+  for (const type of Object.keys(DEFAULT_POLICY.types)) {
+    types[type] = { allowed: false };
+  }
+  return PolicySchema.parse({
+    ...DEFAULT_POLICY,
+    ...doc,
+    types: { ...types, ...(doc.types ?? {}) },
+  });
+}
+
 export class MongoPolicyProvider implements PolicyProvider {
   async get(): Promise<Policy> {
     const docs = (await PolicyModel.find().sort({ version: -1 }).limit(1).lean()) as unknown as Policy[];
@@ -44,7 +62,8 @@ export class MongoPolicyProvider implements PolicyProvider {
       }
       return DEFAULT_POLICY;
     }
-    return PolicySchema.parse(docs[0]);
+    const doc = docs[0];
+    return doc === undefined ? DEFAULT_POLICY : upgradeStoredPolicy(doc as unknown as Record<string, unknown>);
   }
 
   async set(policy: Policy): Promise<Policy> {
