@@ -147,3 +147,7 @@ Ejemplos con curl en [`docs/03-api.md`](docs/03-api.md) y [`docs/12-mas-alla-del
 - **El anclaje vive fuera de Mongo**: su diario registra éxitos y fallos, y la alerta de silencio se compara contra ese diario externo — no contra eventos borrables de la cadena.
 - **Sin transpilador para probar**: Node ≥ 22.6 ejecuta TypeScript de forma nativa (con `--experimental-strip-types`); las pruebas corren con `node --test` (cero dependencias de pruebas).
 - **`node_modules` plano** (`node-linker=hoisted` en [`pnpm-workspace.yaml`](pnpm-workspace.yaml)): en Windows sin permisos de symlink se evitan enlaces rotos.
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Rigo Erisk Reyes. Puedes usar, copiar, modificar y distribuir este código libremente, manteniendo el aviso de copyright y la licencia.

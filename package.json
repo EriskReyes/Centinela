@@ -2,6 +2,7 @@
   "name": "centinela",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Guardián human-in-the-loop para acciones de agentes de IA sobre dinero y datos de empresa: motor de reglas, firma WebAuthn y auditoría completa.",
   "engines": {
